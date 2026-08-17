@@ -1,0 +1,11 @@
+{
+  "cliTax": [
+    {
+      "code": "wvz6zmRWmX",
+      "slug": "blueprint",
+      "endpoint": "https://cli.tax/api/public/skills/{code}",
+      "doc": "https://cli.tax/wvz6zmRWmX",
+      "description": "Blueprint 工程规划 CLI skill（CLI.Tax 发布）"
+    }
+  ]
+}

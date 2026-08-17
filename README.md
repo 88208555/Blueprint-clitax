@@ -8,21 +8,28 @@
 
 clitaxio 的本质只是从 `https://cli.tax/api/public/skills/{code}` 下载两个文件
 （`SKILL.md` + `skill.json`）并写入 IDE 的 skills 目录。本包把这个过程**固化成一个可版本化、
-可分发、可扩展的本地插件包**：
+可分发、可扩展的本地插件包**，并打通了 cli.tax 生态：
 
-- 每个 skill 是一个目录：`skills/<name>/SKILL.md`（+ 可选 `skill.json`、`references/`、`scripts/` 等）
-- 每个 IDE 都从**它自己的用户级根**发现 skill（如 Codex 扫 `~/.codex/skills`、DSH 扫 `~/.dsh/skills`），
-  安装器按此约定把 skill 分发到每个已安装的 IDE，各一份、互不干扰
+- **自动拉取**：`sources.json` 里配置 cli.tax skill 源（如 `wvz6zmRWmX`），
+  `node install.mjs pull` 或 install 时自动从 cli.tax 拉取最新内容到 `skills/`（可提交进 git）
+- **自动匹配分发**：每个 skill 是一个目录：`skills/<name>/SKILL.md`；安装器自动检测本机
+  真实安装的 IDE，把 skill 分发到各 IDE 自己的用户级根（如 Codex 扫 `~/.codex/skills`、
+  DSH 扫 `~/.dsh/skills`），各一份、互不干扰
 - 共享兼容根 `~/.agents/skills` 默认跳过——它会被多个工具扫描，是"同一 skill 重复出现"的根源
+
+**与 clitaxio 的区别**：clitaxio 只把 skill 装到**一个** IDE 目录；本包是"拉取 + 多 IDE 自动分发"，
+装一次，本机所有已装 IDE 都能用。
 
 ## 安装 / 更新 / 卸载
 
 ```bash
 # 本地运行（无需发布）
-node install.mjs install            # 默认「自动匹配」：检测本机真实安装的 IDE，只装给它们
-node install.mjs install --all      # 装到所有已知 IDE（不管是否安装）
+node install.mjs pull            # 从 cli.tax（sources.json）拉取最新 skill 到 skills/，可 git 提交
+node install.mjs install         # 自动匹配：skills/ 为空时自动先 pull，再分发到本机已装 IDE
+node install.mjs install --all   # 装到所有已知 IDE（不管是否安装）
 node install.mjs install --ide codex --ide dsh   # 只装指定 IDE（可重复）
 node install.mjs install --skip cursor       # 自动匹配但跳过指定 IDE（可重复）
+node install.mjs install --pull  # 强制重新从 cli.tax 拉取后再安装
 node install.mjs install --project  # 额外装到当前项目的项目级根
 node install.mjs install --agents   # 额外装到共享 ~/.agents/skills（警告：可能被多工具重复发现）
 node install.mjs install --target /abs/path      # 只装到自定义目录
@@ -63,20 +70,6 @@ node install.mjs uninstall          # 从相同目标卸载本包安装的 skill
 >
 > 新增 IDE：在 `install.mjs` 的 `IDES` 数组加一行即可，其余逻辑自动生效。
 
-## 无限扩展（往包里加 skill）
-
-1. 新建目录：`skills/my-new-skill/SKILL.md`
-2. 按 skill 格式写 frontmatter（`name` 必须 kebab-case，含 `description`）：
-   ```markdown
-   ---
-   name: "my-new-skill"
-   description: "做什么用的，何时使用。"
-   ---
-   # my-new-skill
-   （正文：给 agent 的完整指令）
-   ```
-3. 重跑 `node install.mjs update` —— 新 skill 立即可用，旧的不受影响。
-
 ## 分发给别人
 
 ### 方式 A：Git 仓库（推荐，最简单）
@@ -104,14 +97,30 @@ npx clitaxio@latest install <runtime-code> ~/.codex/skills/<slug>
 
 ```
 dsh-skillpack/
-├── install.mjs       # 安装器（Node ≥18，零依赖）
+├── install.mjs       # 安装器（Node ≥18，零依赖）：pull / install / uninstall / list / ides
+├── sources.json      # ★ cli.tax skill 源清单（code → 自动拉取），扩展就加一行
 ├── package.json      # npm 包元数据（可发布）
 ├── README.md
-└── skills/           # ★ 所有 skill 的源目录，扩展就加子目录
+└── skills/           # skill 内容（pull 生成，可提交 git 离线兜底）
     └── blueprint/
         ├── SKILL.md
         └── skill.json
 ```
+
+## 无限扩展（加新 skill 两种方式）
+
+**方式 A：从 cli.tax 拉取**（推荐）——`sources.json` 加一行：
+```json
+{ "cliTax": [
+  { "code": "wvz6zmRWmX", "slug": "blueprint", "endpoint": "https://cli.tax/api/public/skills/{code}" },
+  { "code": "你的新code", "slug": "新skill名", "endpoint": "https://cli.tax/api/public/skills/{code}" }
+] }
+```
+然后 `node install.mjs pull` → 自动下载到 skills/。
+
+**方式 B：本地手工写**——直接建 `skills/my-new-skill/SKILL.md`（frontmatter: `name` kebab-case + `description`）。
+
+两种方式后都只需 `node install.mjs update` 同步到本机所有已装 IDE。
 
 ## 常见问题
 

@@ -16,22 +16,24 @@
  *   - --ide / --skip 精确控制；新增 IDE 只需在 IDES 表加一行。
  *
  * 用法:
- *   node install.mjs install                # 自动匹配：只装本机已安装的 IDE（推荐）
- *   node install.mjs install --all          # 装到所有已知 IDE（不管是否安装）
- *   node install.mjs install --ide codex    # 仅安装到指定 IDE（可重复: --ide codex --ide dsh）
- *   node install.mjs install --skip cursor  # 自动匹配但跳过指定 IDE（可重复）
- *   node install.mjs install --project      # 额外安装到当前项目的项目级根（每个选中 IDE 一个）
- *   node install.mjs install --agents       # 额外安装到共享 ~/.agents/skills（警告）
+ *   node install.mjs pull                  # 从 sources.json（cli.tax）拉取全部 skill 到 skills/
+ *   node install.mjs install               # 自动匹配：只装本机已安装的 IDE（推荐）
+ *                                          #   skills/ 为空时自动先 pull；--pull 强制重新拉取
+ *   node install.mjs install --all         # 装到所有已知 IDE（不管是否安装）
+ *   node install.mjs install --ide codex   # 仅安装到指定 IDE（可重复: --ide codex --ide dsh）
+ *   node install.mjs install --skip cursor # 自动匹配但跳过指定 IDE（可重复）
+ *   node install.mjs install --project     # 额外安装到当前项目的项目级根（每个选中 IDE 一个）
+ *   node install.mjs install --agents      # 额外安装到共享 ~/.agents/skills（警告）
  *   node install.mjs install --target /abs/path    # 仅自定义目录
- *   node install.mjs update                 # 同 install（幂等覆盖）
- *   node install.mjs uninstall              # 从相同目标移除本包安装的 skills
- *   node install.mjs list                   # 列出本包包含的 skills
- *   node install.mjs ides                   # 列出已知 IDE 及本机检测结果
+ *   node install.mjs update                # 同 install（幂等覆盖）
+ *   node install.mjs uninstall             # 从相同目标移除本包安装的 skills
+ *   node install.mjs list                  # 列出本包包含的 skills
+ *   node install.mjs ides                  # 列出已知 IDE 及本机检测结果
  *
  * 作为 npm 包发布后:  npx dsh-skillpack@latest install
  */
-import { cp, mkdir, readdir, rm } from 'node:fs/promises'
-import { existsSync, readdirSync } from 'node:fs'
+import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -200,6 +202,47 @@ function parseTargets(args) {
 
 const [cmd, ...rest] = process.argv.slice(2)
 
+/** 从 cli.tax 拉取一个 skill 到 skills/<slug>/（覆盖本地副本） */
+async function pullSkill(source) {
+  const url = source.endpoint.replace('{code}', source.code)
+  const resp = await fetch(url)
+  if (!resp.ok) {
+    print(`  ✗ 拉取失败 ${source.slug}（${url} → HTTP ${resp.status}）`)
+    return false
+  }
+  const data = await resp.json()
+  const dir = join(SKILLS_SRC, data.slug || source.slug)
+  await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, 'SKILL.md'), data.skillMd)
+  await writeFile(join(dir, 'skill.json'), data.skillJson)
+  print(`  ✓ 已拉取 ${data.displayName} ${data.version ?? ''} → skills/${data.slug}/`)
+  return true
+}
+
+/** 读取 sources.json 中的源列表 */
+function loadSources() {
+  const p = join(__dirname, 'sources.json')
+  if (!existsSync(p)) return []
+  try {
+    const raw = readFileSync(p, 'utf8')
+    return JSON.parse(raw).cliTax ?? []
+  } catch {
+    print('⚠ sources.json 解析失败，忽略源。')
+    return []
+  }
+}
+
+/** 拉取全部源；失败不影响本地已有 skills */
+async function pullAllSources() {
+  const sources = loadSources()
+  if (!sources.length) return false
+  print(`从 cli.tax 拉取 ${sources.length} 个 skill 源:`)
+  let ok = 0
+  for (const s of sources) { if (await pullSkill(s)) ok++ }
+  print(`拉取完成（${ok}/${sources.length}）。`)
+  return ok > 0
+}
+
 if (cmd === 'list') {
   const skills = await listSkills()
   print(`本包包含 ${skills.length} 个 skills:`)
@@ -212,7 +255,15 @@ if (cmd === 'list') {
   }
   print(`  · agents     共享 agents 级  ${AGENTS.path}（默认跳过，--agents 开启）`)
   print('默认 install 只装 ✓ 标记的 IDE；--all 装全部。')
+} else if (cmd === 'pull') {
+  const ok = await pullAllSources()
+  if (ok) print('已更新 skills/ 目录；可用 git add/commit 提交到仓库。')
+  process.exit(ok ? 0 : 1)
 } else if (cmd === 'install' || cmd === 'update') {
+  // 自动拉取：--pull 强制拉取；skills/ 为空时也自动拉取
+  if (rest.includes('--pull') || !existsSync(SKILLS_SRC) || (await readdir(SKILLS_SRC).catch(() => [])).length === 0) {
+    await pullAllSources()
+  }
   const targets = parseTargets(rest)
   const skills = await listSkills()
   if (!skills.length) { print('skills/ 目录为空，无法安装'); process.exit(1) }
@@ -236,7 +287,8 @@ if (cmd === 'list') {
   print('完成。')
 } else {
   print(`用法:
-  node install.mjs install [--all|--ide <key>|--skip <key>|--project|--agents|--target <dir>]
+  node install.mjs install [--all|--ide <key>|--skip <key>|--project|--agents|--pull|--target <dir>]
+  node install.mjs pull
   node install.mjs update
   node install.mjs uninstall
   node install.mjs list
