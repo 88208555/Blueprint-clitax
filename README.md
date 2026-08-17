@@ -19,18 +19,22 @@ clitaxio 的本质只是从 `https://cli.tax/api/public/skills/{code}` 下载两
 
 ```bash
 # 本地运行（无需发布）
-node install.mjs install            # 默认装到所有已知 IDE 的用户级根（全球通用安装位置）
-node install.mjs install --only-installed   # 只装本机已检测到的 IDE
+node install.mjs install            # 默认「自动匹配」：检测本机真实安装的 IDE，只装给它们
+node install.mjs install --all      # 装到所有已知 IDE（不管是否安装）
 node install.mjs install --ide codex --ide dsh   # 只装指定 IDE（可重复）
-node install.mjs install --skip cursor       # 装全部但跳过指定 IDE（可重复）
+node install.mjs install --skip cursor       # 自动匹配但跳过指定 IDE（可重复）
 node install.mjs install --project  # 额外装到当前项目的项目级根
 node install.mjs install --agents   # 额外装到共享 ~/.agents/skills（警告：可能被多工具重复发现）
 node install.mjs install --target /abs/path      # 只装到自定义目录
 node install.mjs update             # 幂等覆盖，等同 install
 node install.mjs list               # 列出包内 skills
-node install.mjs ides               # 查看已知 IDE 及本机检测结果
+node install.mjs ides               # 查看已知 IDE 及本机检测结果（✓ = 本机已装）
 node install.mjs uninstall          # 从相同目标卸载本包安装的 skills
 ```
+
+**自动匹配说明**：默认安装会探测本机真实安装的 IDE（`which` 命令 / 应用路径 / 配置文件），
+只装给已安装的 IDE，让每个 IDE 自己识别需要的 skill。用 `node install.mjs ides` 查看
+本机检测结果（✓ = 已安装）。
 
 ## 支持的 IDE（全世界已知安装位置，官方文档核实）
 
