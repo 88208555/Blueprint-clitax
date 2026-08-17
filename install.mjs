@@ -128,7 +128,7 @@ async function listSkills() {
   return skills.sort()
 }
 
-async function syncOne(name, targetRoot, { remove = false } = {}) {
+async function syncOne(name, targetRoot, { remove = false, silent = false } = {}) {
   const dest = join(targetRoot, name)
   if (remove) {
     if (existsSync(dest)) { await rm(dest, { recursive: true, force: true }); print(`  ✓ 已移除 ${name} ← ${targetRoot}`) }
@@ -148,6 +148,7 @@ async function syncOne(name, targetRoot, { remove = false } = {}) {
     await writeMeta(dest, { ...srcMeta, installedAt: new Date().toISOString() })
   }
   const upgrade = destMeta && srcMeta && destMeta.version && srcMeta.version && destMeta.version !== srcMeta.version
+  if (silent) return
   if (upgrade) {
     print(`  ⤴ 已更新 ${name} ${destMeta.version} → ${srcMeta.version} → ${dest}`)
   } else {
@@ -155,12 +156,12 @@ async function syncOne(name, targetRoot, { remove = false } = {}) {
   }
 }
 
-async function syncAll(targetRoot, { remove = false, reportUpdated } = {}) {
+async function syncAll(targetRoot, { remove = false, reportUpdated, silent = false } = {}) {
   const skills = await listSkills()
   if (!remove) await mkdir(targetRoot, { recursive: true })
   for (const s of skills) {
     const before = reportUpdated ? readMeta(join(targetRoot, s)) : null
-    await syncOne(s, targetRoot, { remove })
+    await syncOne(s, targetRoot, { remove, silent })
     if (reportUpdated && before && before.version) {
       const after = readMeta(join(targetRoot, s))
       if (after && after.version && after.version !== before.version) reportUpdated(1)
@@ -398,18 +399,21 @@ if (cmd === 'list') {
   const skills = await listSkills()
   if (!skills.length) { print('skills/ 目录为空，无法安装'); process.exit(1) }
   if (rest.includes('--agents') && !targets.some((t) => t.path === AGENTS.path)) targets.push(AGENTS)
-  print(`将安装 ${skills.length} 个 skills → ${targets.length} 个目标`)
+  const silent = rest.includes('--silent') || rest.includes('--yes')
+  if (!silent) print(`将安装 ${skills.length} 个 skills → ${targets.length} 个目标`)
   let updated = 0
   for (const t of targets) {
-    print(`[${t.label}] ${t.path}`)
-    await syncAll(t.path, { reportUpdated: (n) => { updated += n } })
+    if (!silent) print(`[${t.label}] ${t.path}`)
+    await syncAll(t.path, { reportUpdated: (n) => { updated += n }, silent })
   }
   if (rest.includes('--agents')) {
     print('⚠ 已安装到共享 ~/.agents/skills：该目录会被 Codex/Gemini/Zed/OpenCode/Cursor 等同时扫描，同一 skill 可能被重复发现。')
   }
-  print('完成。各 IDE 会自动发现各自用户级根中的新目录（可立即在新会话中调用）。')
-  if (updated) {
-    print(`提示：${updated} 个 skill 有更新。以后可用 node install.mjs check 检查新版本。`)
+  if (!silent) {
+    print('完成。各 IDE 会自动发现各自用户级根中的新目录（可立即在新会话中调用）。')
+    if (updated) {
+      print(`提示：${updated} 个 skill 有更新。以后可用 node install.mjs check 检查新版本。`)
+    }
   }
 } else if (cmd === 'check') {
   const targets = parseTargets(rest)

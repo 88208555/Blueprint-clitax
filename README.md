@@ -96,13 +96,31 @@ node install.mjs install
 ```
 更新：`git pull && node install.mjs update`（install/update 会对比已装版本与 cli.tax 最新版本并提示）。
 
-### 更新感知（check）
-安装器写入 `install-meta.json`（来源/版本/时间）到每个 skill 目录；SKILL.md 注入版本横幅，
-IDE 每次读取即可见版本与更新入口。主动检查：
+### 更新感知（自动升级 + check）
+
+**自动升级**：每次发布新版本到 npm / cli.tax 后，已安装用户只需重跑一次安装命令，
+安装器会自动对比本地已装版本与远端最新版本，**有新版本直接覆盖升级到最新**（无需先卸载）：
+
+```bash
+npx cli-blueprint@latest install     # 自动拉取最新并覆盖升级（blueprint/calctool/swarm）
+node install.mjs install             # 源码方式同理
+```
+升级时输出 `⤴ 已更新 <skill> 旧版本 → 新版本`。
+
+**静默自动更新（--silent / --yes）**：不想看到任何安装/升级输出，直接覆盖到最新：
+```bash
+npx cli-blueprint@latest install --silent   # 静默升级，无任何提示
+node install.mjs install --yes              # 源码方式静默升级
+```
+
+**主动检查（check）**：不确定是否有新版本时，可随时主动检查（不写盘）：
 ```bash
 node install.mjs check               # 遍历本机已装 IDE，对比 cli.tax 最新版本
-npx cli-blueprint@latest check       # 单包检查（calctool 同理）
+npx cli-blueprint@latest check       # 单包检查（calctool / swarm 同理）
 ```
+
+安装器写入 `install-meta.json`（来源/版本/时间）到每个 skill 目录；SKILL.md 注入版本横幅，
+IDE 每次读取即可见当前版本与更新命令。
 
 ### 方式 C：直接用 clitaxio（只装单个 IDE，作为对照）
 ```bash
