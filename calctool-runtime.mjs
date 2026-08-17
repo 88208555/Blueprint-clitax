@@ -100,7 +100,7 @@ const OPERATION_CATALOG = Object.freeze([
 const LOCAL_RUNNER_OPERATIONS = new Set([
   "run", "compile", "generate", "verify", "estimate", "impact", "status", "inventory", "purge",
   "brain-handshake", "brain-invoke", "brain-events", "brain-cancel", "brain-complete", "brain-resume", "brain-status",
-  "probe-env", "adapt-config",
+  "probe-env", "adapt-config", "intake-round",
 ]);
 
 // ---------- 工具函数 ----------
@@ -595,6 +595,63 @@ export async function run(request, runtimeOptions = {}) {
     return okResponse(requestId, {
       questions: INTAKE_QUESTIONS,
       nextStep: { operation: "compile-inline", instruction: "Turn the user's answers into an engine definition, call compile-inline with input.requirements, and present the generated definition after a clean validation." },
+    });
+  }
+
+  // 顾问式多轮对话：智能体主动给方案，老板逐轮确认/修改，直到说「创建」
+  if (operation === "intake-round") {
+    const input = request.input ?? {};
+    const domainRef = input.domainReference;   // 领域参考包（research 产出，可选）
+    const message = text(input.message || "");  // 老板本轮说的话
+    const round = Number(input.round) || 0;
+    const confirmed = input.confirmed ?? {};    // 已确认的配置
+
+    // 识别老板意图：创建 / 修改 / 询问
+    const intent = /创建|生成|开始搭|就这样|确认|ok|好[的了]?$/i.test(message) ? "create"
+      : /加|增加|再加|还要|补充/i.test(message) ? "add"
+      : /改|修改|换成|不要|去掉|删除/i.test(message) ? "modify"
+      : round === 0 ? "propose" : "clarify";
+
+    const domainMetrics = Array.isArray(domainRef?.metrics) ? domainRef.metrics : [];
+    const domainFormulas = Array.isArray(domainRef?.formulas) ? domainRef.formulas : [];
+    const domainBenchmarks = Array.isArray(domainRef?.benchmarks) ? domainRef.benchmarks : [];
+    const configurable = Array.isArray(domainRef?.configurableOptions) ? domainRef.configurableOptions : [];
+
+    if (intent === "create") {
+      // 老板说创建：输出已确认配置 → 交给 compile
+      return okResponse(requestId, {
+        intent: "create",
+        summary: confirmed,
+        nextStep: { operation: "brain-invoke", instruction: "Dispatch the swarm with the confirmed requirements (fields/formulas/rules), or call compile-inline for single-agent generation." },
+      });
+    }
+
+    if (intent === "propose" || intent === "clarify") {
+      // 主动给方案：基于领域参考包输出建议指标/口径选项
+      const proposals = domainMetrics.slice(0, 8).map((m) => ({
+        key: m.key, label: m.label, formula: m.formula, note: m.definition?.slice(0, 60),
+      }));
+      const pendingOptions = configurable.map((opt) => opt); // 需要老板确认的口径选项
+      return okResponse(requestId, {
+        intent: "propose",
+        round: round + 1,
+        proposedMetrics: proposals,
+        formulaNotes: domainFormulas.slice(0, 5).map((f) => ({ key: f.key, expression: f.expression, note: f.notes })),
+        benchmarks: domainBenchmarks.slice(0, 5).map((b) => ({ metric: b.metric, healthy: b.healthy })),
+        pendingChoices: pendingOptions,
+        reply: "请老板确认指标清单；有口径争议（如转化率分母、投产比分子）请逐项选择。说「加 X」增补指标，说「改 X」调整，说「创建」开始生成。",
+        nextStep: { operation: "intake-round", instruction: "Continue the conversation: send the boss's reply as input.message with the confirmed options in input.confirmed." },
+      });
+    }
+
+    // add / modify：记录老板的增改，继续对话
+    return okResponse(requestId, {
+      intent,
+      round: round + 1,
+      delta: message,
+      confirmed,
+      reply: "已记录。继续补充，或说「创建」开始生成工具。",
+      nextStep: { operation: "intake-round", instruction: "Continue the conversation." },
     });
   }
 
