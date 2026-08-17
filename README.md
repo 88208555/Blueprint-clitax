@@ -79,12 +79,13 @@ node install.mjs uninstall          # 从相同目标卸载本包安装的 skill
 ## 分发给别人
 
 ### 方式 A：npm 一条命令（推荐，最简单）
-已发布到 npm（`cli-blueprint@0.2.1` / `cli-calctool@0.1.1`），使用者只需：
+已发布到 npm（`cli-blueprint` / `cli-calctool` / `cli-swarm`），使用者只需：
 ```bash
-npx cli-blueprint@latest install     # 装 blueprint + calctool 两个 skill
+npx cli-blueprint@latest install     # 装 blueprint + calctool + swarm 三个 skill
 npx cli-calctool@latest install      # 同样内容（calctool 命名入口）
+npx cli-swarm@latest install         # 同样内容（swarm 命名入口）
 ```
-自动完成：从 cli.tax 拉取 blueprint + calctool → 检测本机已装 IDE → 分发到每个 IDE。
+自动完成：从 cli.tax 拉取 blueprint + calctool + swarm → 检测本机已装 IDE → 分发到每个 IDE。
 更新：同一命令（`@latest` 自动拉新版），且每次 install 会对比 cli.tax 最新版本并提示 ⤴。
 
 ### 方式 B：Git 仓库

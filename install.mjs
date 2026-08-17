@@ -249,7 +249,7 @@ async function writeMeta(skillDir, meta) {
 /** 在 SKILL.md frontmatter 之后注入版本横幅：IDE 每次读取即见版本与更新命令 */
 function injectVersionBanner(skillMd, version, slug) {
   if (!skillMd || !version) return skillMd
-  const banner = `<!-- calctool-installer: version ${version} · 检查更新见 install-meta.json / npx cli-${slug}@latest check -->\n`
+  const banner = `<!-- cli-${slug}-installer: version ${version} · 检查更新见 install-meta.json / npx cli-${slug}@latest check -->\n`
   if (skillMd.startsWith('---')) {
     const end = skillMd.indexOf('\n---', 3)
     if (end !== -1) {
