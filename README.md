@@ -79,12 +79,13 @@ node install.mjs uninstall          # 从相同目标卸载本包安装的 skill
 ## 分发给别人
 
 ### 方式 A：npm 一条命令（推荐，最简单）
-已发布到 npm（`cli-blueprint@0.1.0`），使用者只需：
+已发布到 npm（`cli-blueprint@0.1.0` / `cli-calctool@0.1.0`），使用者只需：
 ```bash
-npx cli-blueprint@latest install
+npx cli-blueprint@latest install     # 装 blueprint + calctool 两个 skill
+npx cli-calctool@latest install      # 同样内容（calctool 命名入口）
 ```
-自动完成：从 cli.tax 拉取 blueprint → 检测本机已装 IDE → 分发到每个 IDE。
-更新：同一命令（`@latest` 自动拉新版）。
+自动完成：从 cli.tax 拉取 blueprint + calctool → 检测本机已装 IDE → 分发到每个 IDE。
+更新：同一命令（`@latest` 自动拉新版），且每次 install 会对比 cli.tax 最新版本并提示 ⤴。
 
 ### 方式 B：Git 仓库
 ```bash
@@ -92,7 +93,15 @@ git clone https://github.com/88208555/Blueprint-clitax.git
 cd Blueprint-clitax
 node install.mjs install
 ```
-更新：`git pull && node install.mjs update`
+更新：`git pull && node install.mjs update`（install/update 会对比已装版本与 cli.tax 最新版本并提示）。
+
+### 更新感知（check）
+安装器写入 `install-meta.json`（来源/版本/时间）到每个 skill 目录；SKILL.md 注入版本横幅，
+IDE 每次读取即可见版本与更新入口。主动检查：
+```bash
+node install.mjs check               # 遍历本机已装 IDE，对比 cli.tax 最新版本
+npx cli-blueprint@latest check       # 单包检查（calctool 同理）
+```
 
 ### 方式 C：直接用 clitaxio（只装单个 IDE，作为对照）
 ```bash

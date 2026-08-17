@@ -15,6 +15,11 @@
  *     需要时用 --agents 显式开启（会打印警告）；
  *   - --ide / --skip 精确控制；新增 IDE 只需在 IDES 表加一行。
  *
+ * 更新感知：
+ *   - pull 时把 cli.tax 返回的 version 写入 skills/<slug>/install-meta.json；
+ *   - install / update 时对比「已安装版本」与「远端最新版本」，有新版本会提示；
+ *   - check 子命令：遍历本机已装 IDE 的 skill 目录，对比远端最新版本并报告更新。
+ *
  * 用法:
  *   node install.mjs pull                  # 从 sources.json（cli.tax）拉取全部 skill 到 skills/
  *   node install.mjs install               # 自动匹配：只装本机已安装的 IDE（推荐）
@@ -26,6 +31,7 @@
  *   node install.mjs install --agents      # 额外安装到共享 ~/.agents/skills（警告）
  *   node install.mjs install --target /abs/path    # 仅自定义目录
  *   node install.mjs update                # 同 install（幂等覆盖）
+ *   node install.mjs check                 # 检查已安装 skill 是否有新版本（对比 cli.tax）
  *   node install.mjs uninstall             # 从相同目标移除本包安装的 skills
  *   node install.mjs list                  # 列出本包包含的 skills
  *   node install.mjs ides                  # 列出已知 IDE 及本机检测结果
@@ -44,6 +50,9 @@ const SKILLS_SRC = join(__dirname, 'skills')
 
 const HOME = homedir()
 const CWD = process.cwd()
+
+/** 每个 skill 安装/拉取时的版本元数据文件名（IDE 目录与 skills/ 内都会写） */
+const INSTALL_META = 'install-meta.json'
 
 /**
  * 全世界已知 IDE/编码 agent 的 skills 安装位置表（官方文档核实，2026-08）。
@@ -126,14 +135,37 @@ async function syncOne(name, targetRoot, { remove = false } = {}) {
     return
   }
   await mkdir(dest, { recursive: true })
-  await cp(join(SKILLS_SRC, name), dest, { recursive: true, force: true })
-  print(`  ✓ 已安装 ${name} → ${dest}`)
+  const sourceDir = join(SKILLS_SRC, name)
+  const destMeta = readMeta(dest) // 覆盖前读取旧版本
+  await cp(sourceDir, dest, { recursive: true, force: true })
+  const srcMeta = readMeta(sourceDir)
+  // 安装时注入版本横幅到 SKILL.md（IDE 每次读取即见版本与更新入口）
+  if (srcMeta?.version) {
+    const installedSkillMd = readFileSync(join(dest, 'SKILL.md'), 'utf8')
+    await writeFile(join(dest, 'SKILL.md'), injectVersionBanner(installedSkillMd, srcMeta.version, name))
+  }
+  if (srcMeta) {
+    await writeMeta(dest, { ...srcMeta, installedAt: new Date().toISOString() })
+  }
+  const upgrade = destMeta && srcMeta && destMeta.version && srcMeta.version && destMeta.version !== srcMeta.version
+  if (upgrade) {
+    print(`  ⤴ 已更新 ${name} ${destMeta.version} → ${srcMeta.version} → ${dest}`)
+  } else {
+    print(`  ✓ 已安装 ${name} → ${dest}${srcMeta?.version ? `（${srcMeta.version}）` : ''}`)
+  }
 }
 
-async function syncAll(targetRoot, { remove = false } = {}) {
+async function syncAll(targetRoot, { remove = false, reportUpdated } = {}) {
   const skills = await listSkills()
   if (!remove) await mkdir(targetRoot, { recursive: true })
-  for (const s of skills) await syncOne(s, targetRoot, { remove })
+  for (const s of skills) {
+    const before = reportUpdated ? readMeta(join(targetRoot, s)) : null
+    await syncOne(s, targetRoot, { remove })
+    if (reportUpdated && before && before.version) {
+      const after = readMeta(join(targetRoot, s))
+      if (after && after.version && after.version !== before.version) reportUpdated(1)
+    }
+  }
 }
 
 /** 解析目标列表：--target / --ide / --skip / 默认（全部已知 IDE） */
@@ -202,6 +234,31 @@ function parseTargets(args) {
 
 const [cmd, ...rest] = process.argv.slice(2)
 
+/** 读取 skill 目录的 install-meta.json（没有则返回 null） */
+function readMeta(skillDir) {
+  const p = join(skillDir, INSTALL_META)
+  if (!existsSync(p)) return null
+  try { return JSON.parse(readFileSync(p, 'utf8')) } catch { return null }
+}
+
+/** 写入 skill 目录的 install-meta.json（来源/版本/时间/地址） */
+async function writeMeta(skillDir, meta) {
+  await writeFile(join(skillDir, INSTALL_META), `${JSON.stringify(meta, null, 2)}\n`)
+}
+
+/** 在 SKILL.md frontmatter 之后注入版本横幅：IDE 每次读取即见版本与更新命令 */
+function injectVersionBanner(skillMd, version, slug) {
+  if (!skillMd || !version) return skillMd
+  const banner = `<!-- calctool-installer: version ${version} · 检查更新见 install-meta.json / npx cli-${slug}@latest check -->\n`
+  if (skillMd.startsWith('---')) {
+    const end = skillMd.indexOf('\n---', 3)
+    if (end !== -1) {
+      return `${skillMd.slice(0, end + 5)}\n\n${banner}${skillMd.slice(end + 5).replace(/^\n+/, '')}`
+    }
+  }
+  return `${banner}${skillMd}`
+}
+
 /** 从 cli.tax 拉取一个 skill 到 skills/<slug>/（覆盖本地副本） */
 async function pullSkill(source) {
   const url = source.endpoint.replace('{code}', source.code)
@@ -215,8 +272,81 @@ async function pullSkill(source) {
   await mkdir(dir, { recursive: true })
   await writeFile(join(dir, 'SKILL.md'), data.skillMd)
   await writeFile(join(dir, 'skill.json'), data.skillJson)
-  print(`  ✓ 已拉取 ${data.displayName} ${data.version ?? ''} → skills/${data.slug}/`)
+  const previous = readMeta(dir)
+  await writeMeta(dir, {
+    source: source.code,
+    slug: data.slug || source.slug,
+    version: data.version ?? '',
+    endpoint: url,
+    installedAt: new Date().toISOString(),
+  })
+  const changed = previous && previous.version && previous.version !== data.version
+  if (changed) {
+    print(`  ⤴ 已更新 ${data.displayName} ${previous.version} → ${data.version ?? ''} → skills/${data.slug}/`)
+  } else {
+    print(`  ✓ 已拉取 ${data.displayName} ${data.version ?? ''} → skills/${data.slug}/`)
+  }
   return true
+}
+
+/** 从 cli.tax 拉取单个 skill 的最新元数据（check 用，不写盘） */
+async function fetchLatestMeta(source) {
+  const url = source.endpoint.replace('{code}', source.code)
+  try {
+    const resp = await fetch(url)
+    if (!resp.ok) return null
+    const data = await resp.json()
+    return {
+      source: source.code,
+      slug: data.slug || source.slug,
+      version: data.version ?? '',
+      displayName: data.displayName ?? data.slug ?? source.slug,
+      endpoint: url,
+    }
+  } catch {
+    return null
+  }
+}
+
+/** check：遍历已安装目标的 skill 目录，对比远端最新版本，报告更新 */
+async function checkUpdates(targets) {
+  const sources = loadSources()
+  if (!sources.length) {
+    print('⚠ sources.json 无源，无法检查更新。')
+    return 1
+  }
+  let found = 0
+  for (const t of targets) {
+    print(`[${t.label}] ${t.path}`)
+    if (!existsSync(t.path)) { print('  · 未安装'); continue }
+    const entries = (await readdir(t.path, { withFileTypes: true }).catch(() => []))
+      .filter((e) => e.isDirectory())
+    if (!entries.length) { print('  · 无已安装 skill'); continue }
+    for (const e of entries) {
+      const skillDir = join(t.path, e.name)
+      const local = readMeta(skillDir)
+      const source = sources.find((s) => (s.slug === e.name)
+        || (local && local.source === s.code))
+      if (!source) continue
+      const remote = await fetchLatestMeta(source)
+      if (!remote) { print(`  · ${e.name}：远端查询失败，跳过`); continue }
+      if (!local || !local.version) {
+        print(`  · ${e.name}：本地无版本记录（旧安装），远端最新 ${remote.version} —— 运行 install 补齐`)
+        found++
+      } else if (local.version === remote.version) {
+        print(`  ✓ ${e.name} 已是最新（${remote.version}）`)
+      } else {
+        print(`  ⤴ ${e.name} 有新版本 ${local.version} → ${remote.version} —— 运行 install 更新`)
+        found++
+      }
+    }
+  }
+  if (found) {
+    print(`\n发现 ${found} 个 skill 可更新。执行: node install.mjs install`)
+  } else {
+    print('\n全部已是最新。')
+  }
+  return 0
 }
 
 /** 读取 sources.json 中的源列表 */
@@ -269,14 +399,22 @@ if (cmd === 'list') {
   if (!skills.length) { print('skills/ 目录为空，无法安装'); process.exit(1) }
   if (rest.includes('--agents') && !targets.some((t) => t.path === AGENTS.path)) targets.push(AGENTS)
   print(`将安装 ${skills.length} 个 skills → ${targets.length} 个目标`)
+  let updated = 0
   for (const t of targets) {
     print(`[${t.label}] ${t.path}`)
-    await syncAll(t.path)
+    await syncAll(t.path, { reportUpdated: (n) => { updated += n } })
   }
   if (rest.includes('--agents')) {
     print('⚠ 已安装到共享 ~/.agents/skills：该目录会被 Codex/Gemini/Zed/OpenCode/Cursor 等同时扫描，同一 skill 可能被重复发现。')
   }
   print('完成。各 IDE 会自动发现各自用户级根中的新目录（可立即在新会话中调用）。')
+  if (updated) {
+    print(`提示：${updated} 个 skill 有更新。以后可用 node install.mjs check 检查新版本。`)
+  }
+} else if (cmd === 'check') {
+  const targets = parseTargets(rest)
+  if (rest.includes('--agents') && !targets.some((t) => t.path === AGENTS.path)) targets.push(AGENTS)
+  process.exitCode = await checkUpdates(targets)
 } else if (cmd === 'uninstall') {
   const targets = parseTargets(rest)
   if (rest.includes('--agents') && !targets.some((t) => t.path === AGENTS.path)) targets.push(AGENTS)
@@ -290,6 +428,7 @@ if (cmd === 'list') {
   node install.mjs install [--all|--ide <key>|--skip <key>|--project|--agents|--pull|--target <dir>]
   node install.mjs pull
   node install.mjs update
+  node install.mjs check
   node install.mjs uninstall
   node install.mjs list
   node install.mjs ides`)
