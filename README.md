@@ -1,12 +1,14 @@
 # cli-blueprint
 
-**Blueprint skill 多 IDE 安装器** —— 一条命令从 cli.tax 拉取并分发到本机所有已装 IDE，可无限扩展。
+**多 skill 多 IDE 安装器** —— 一条命令从 cli.tax 拉取并分发到本机所有已装 IDE，可无限扩展。
 
 ```bash
 npx cli-blueprint@latest install
 ```
 
-默认包含：`blueprint`（CLI.Tax 工程规划 skill，`https://cli.tax/wvz6zmRWmX`）。
+默认包含：
+- `blueprint`（CLI.Tax 工程规划 skill，`https://cli.tax/wvz6zmRWmX`）
+- `calctool`（万能计算工具生成器，`https://cli.tax/VjFfeR6wdB`）
 
 ## 这是什么机制？
 

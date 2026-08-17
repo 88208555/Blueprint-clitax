@@ -149,13 +149,17 @@ function validateEngine(engine) {
       findings.push(finding("P0", "ENGINE_REQUIRED_ARRAY", "engine.formulas", "formulas must be an array."));
     } else {
       const fieldKeys = new Set((engine.fields ?? []).map((f) => f?.key));
+      const formulaKeys = new Set((engine.formulas ?? []).map((f) => f?.key));
       for (const [i, fm] of engine.formulas.entries()) {
         const ref = `engine.formulas[${i}]`;
         if (!text(fm?.key)) findings.push(finding("P0", "FORMULA_REQUIRED_KEY", ref, "formula key is required."));
         if (!fm?.expression) findings.push(finding("P0", "FORMULA_REQUIRED_EXPRESSION", ref, "formula expression (AST or text) is required."));
         const refs = extractRefs(fm?.expression);
         for (const r of refs) {
-          if (!fieldKeys.has(r)) findings.push(finding("P1", "FORMULA_REF_MISSING", `${ref}.expression`, `formula references missing field ${r}.`));
+          // 引用可以指向字段（field-catalog）或公式输出（formula key），二者皆合法
+          if (!fieldKeys.has(r) && !formulaKeys.has(r)) {
+            findings.push(finding("P1", "FORMULA_REF_MISSING", `${ref}.expression`, `formula references missing field or formula ${r}.`));
+          }
         }
       }
     }
