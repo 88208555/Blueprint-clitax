@@ -8,7 +8,7 @@ npx cli-blueprint@latest install
 
 默认包含：
 - `blueprint`（CLI.Tax 工程规划 skill，`https://cli.tax/wvz6zmRWmX`）
-- `calctool`（万能计算工具生成器，`https://cli.tax/VjFfeR6wdB`）
+- `calctool`（万能计算工具生成器，`https://cli.tax/KKyA6xljUX`）
 
 ## 这是什么机制？
 
@@ -79,7 +79,7 @@ node install.mjs uninstall          # 从相同目标卸载本包安装的 skill
 ## 分发给别人
 
 ### 方式 A：npm 一条命令（推荐，最简单）
-已发布到 npm（`cli-blueprint@0.1.0` / `cli-calctool@0.1.0`），使用者只需：
+已发布到 npm（`cli-blueprint@0.2.1` / `cli-calctool@0.1.1`），使用者只需：
 ```bash
 npx cli-blueprint@latest install     # 装 blueprint + calctool 两个 skill
 npx cli-calctool@latest install      # 同样内容（calctool 命名入口）
