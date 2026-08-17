@@ -1,6 +1,6 @@
 ---
 name: calctool
-description: 按需生成「万能计算工具」：用户输入一个领域需求（如"我是财务，想要一个经营健康诊断工具"），本技能通过提问明确指标、公式、输入方式与输出形式，生成一个可执行、可验证、可发布的在线计算工具——支持自定义指标、自定义公式逻辑、用户上传内容自动识别（Excel 映射 / 图片 OCR）、报告输出。当用户想"把某套计算逻辑/指标/公式做成在线工具"时使用。 Generate a runnable, verifiable, publishable online calculator from a domain need, with custom metrics, formulas, and upload recognition (Excel mapping / image OCR). Use when the user wants to turn a calculation logic into an online tool. Создаёт работающий, проверяемый онлайн-калькулятор по потребности домена: пользовательские метрики, формулы и распознавание загрузок (Excel / OCR). Используйте, когда нужно превратить расчётную логику в онлайн-инструмент.
+description: '按需生成「万能计算工具」：用户输入一个领域需求（如"我是财务，想要一个经营健康诊断工具"），本技能通过提问明确指标、公式、输入方式与输出形式，生成一个可执行、可验证、可发布的在线计算工具——支持自定义指标、自定义公式逻辑、用户上传内容自动识别（Excel 映射 / 图片 OCR）、报告输出。当用户想"把某套计算逻辑/指标/公式做成在线工具"时使用。 Generate a runnable, verifiable, publishable online calculator from a domain need, with custom metrics, formulas, and upload recognition (Excel mapping / image OCR). Use when the user wants to turn a calculation logic into an online tool. Создаёт работающий, проверяемый онлайн-калькулятор по потребности домена: пользовательские метрики, формулы и распознавание загрузок (Excel / OCR). Используйте, когда нужно превратить расчётную логику в онлайн-инструмент.'
 ---
 
 # calctool

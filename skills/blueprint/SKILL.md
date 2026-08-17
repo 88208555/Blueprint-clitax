@@ -1,6 +1,6 @@
 ---
 name: blueprint
-description: 把一个目标编译为可执行、可验证、可追溯的工程蓝图（确定性检查节点/依赖/验收标准/合同）。Compile one goal into an executable, verifiable, traceable engineering blueprint with deterministic checks. Превращает цель в исполняемый, проверяемый инженерный план с узлами, зависимостями, критериями приёмки и валидацией.
+description: '把一个目标编译为可执行、可验证、可追溯的工程蓝图（确定性检查节点/依赖/验收标准/合同）。Compile one goal into an executable, verifiable, traceable engineering blueprint with deterministic checks. Превращает цель в исполняемый, проверяемый инженерный план с узлами, зависимостями, критериями приёмки и валидацией.'
 ---
 
 # Blueprint Skill
