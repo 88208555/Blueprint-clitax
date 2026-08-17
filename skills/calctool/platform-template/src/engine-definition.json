@@ -1,0 +1,45 @@
+{
+  "engineId": "ecommerce-ops-dashboard",
+  "name": "电商运营仪表盘",
+  "semanticVersion": "1.0.0",
+  "category": "ecommerce",
+  "decimalPolicy": "decimal-string",
+  "fields": [
+    { "key": "visitors", "label": "访客数", "type": "integer", "unit": "人", "required": true },
+    { "key": "orders", "label": "订单数", "type": "integer", "unit": "单", "required": true },
+    { "key": "gmv", "label": "GMV", "type": "money", "unit": "CNY", "required": true },
+    { "key": "adSpend", "label": "广告费", "type": "money", "unit": "CNY", "required": true },
+    { "key": "customRate", "label": "自定义转化率修正", "type": "percent", "unit": "%" }
+  ],
+  "formulas": [
+    {
+      "key": "conversionRate",
+      "label": "转化率",
+      "expression": { "op": "safeDivide", "args": [{ "ref": "orders" }, { "ref": "visitors" }] }
+    },
+    {
+      "key": "aov",
+      "label": "客单价",
+      "expression": { "op": "safeDivide", "args": [{ "ref": "gmv" }, { "ref": "orders" }] }
+    },
+    {
+      "key": "roas",
+      "label": "ROAS",
+      "expression": { "op": "safeDivide", "args": [{ "ref": "gmv" }, { "ref": "adSpend" }] }
+    },
+    {
+      "key": "gmvPerVisitor",
+      "label": "访客价值",
+      "expression": { "op": "safeDivide", "args": [{ "ref": "gmv" }, { "ref": "visitors" }] }
+    }
+  ],
+  "rules": [],
+  "views": [],
+  "testSuites": [
+    {
+      "name": "基准样例",
+      "inputs": { "visitors": 10000, "orders": 300, "gmv": 50000, "adSpend": 12000 },
+      "expect": { "conversionRate": "3", "aov": "166.6667", "roas": "4.1667" }
+    }
+  ]
+}
