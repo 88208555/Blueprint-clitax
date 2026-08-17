@@ -70,6 +70,35 @@ defaultLocale: zh-CN
 - 发布为版本化引擎，任何公式/字段/阈值变化都创建新版本，不原地修改
 - 输出：可运行的在线工具 + 引擎定义包 + 验收报告
 
+## 多智能体蜂群模式（大脑协同，推荐复杂工具用）
+
+单智能体 `compile-inline` 适合简单工具；复杂工具（多字段 + 多公式 + 规则 + 导入 + 报告）用**蜂群协同**，多智能体并行生成、独立复核、确定性合并——准确率更高、产出更强。
+
+### 大脑模式（brain-handshake）
+- `ide`：用当前 IDE 的多智能体（subagent）执行蜂群（默认）
+- `hermes_local`：用用户本地安装的 Hermes 执行蜂群
+
+### 蜂群流程（协议 calctool.coordinator.run-plan/1.0）
+
+1. **brain-handshake**：协商大脑模式（ide/hermes_local），返回蜂群能力
+2. **brain-invoke**：传需求 → **自动拆解**为蜂群任务（按需派发，需要几个派几个）：
+   - `fields` 字段目录（入口，总是有）
+   - `formulas` 公式图（有公式才派）· 独立复核
+   - `rules` 规则包（有规则才派）· 独立复核
+   - `imports` 导入映射（有导入才派）
+   - `reports` 报告模板（有报告才派）
+   - `pages` 页面规格（总是有）
+   依赖图驱动：fields 先 → formulas/imports 并行 → reports → pages；maxParallel 控制并发
+3. **brain-invoke 批量派发**：每个就绪 work item 派给一个独立智能体，收集产物
+4. **brain-events / brain-status**：流式收集事件、查询蜂群状态（就绪/运行/阻塞）
+5. **brain-complete**：提交全部产物 → **确定性合并**为引擎定义 → 校验 → 发布
+6. **brain-cancel**：随时取消蜂群
+
+### 准确率与用户控制
+- **准确率**：合并后引擎定义必须通过确定性校验（引用闭合/公式链/单位/Decimal/无环），0 findings 才发布
+- **用户控制**：每一步产物可查看、修改、重试（budget.maxAttempts）；最终工具可测算、改公式、调阈值
+- **编程能力**：蜂群产物是真实可编译的引擎定义（JSON AST + Decimal 运行时），不是伪代码
+
 ## 输出产物
 
 ```
