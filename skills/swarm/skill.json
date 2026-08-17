@@ -5,6 +5,6 @@
   "schemaVersion": "cli.request/1.0",
   "endpoint": "https://cli.tax/zj7fTPVh4p",
   "method": "POST",
-  "version": "v0.1.0",
+  "version": "v0.2.0",
   "type": "Skill"
 }
