@@ -1,6 +1,6 @@
 {
   "name": "calctool",
-  "displayName": "calctool",
+  "displayName": "Calctool",
   "description": "按需生成「万能计算工具」：输入领域需求（如财务经营健康诊断），通过提问明确指标/公式/输入方式，生成可执行、可验证、可发布的在线计算工具——支持自定义指标、自定义公式、上传内容自动识别（Excel/OCR）、报告输出。",
   "schemaVersion": "cli.request/1.0",
   "endpoint": "https://cli.tax/KKyA6xljUX",
