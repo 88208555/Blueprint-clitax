@@ -431,6 +431,8 @@ if (cmd === 'list') {
   node install.mjs check
   node install.mjs uninstall
   node install.mjs list
-  node install.mjs ides`)
+  node install.mjs ides
+
+  npm 安装后（npx cli-blueprint@latest / npx cli-calctool@latest）用法相同。`)
   process.exit(1)
 }

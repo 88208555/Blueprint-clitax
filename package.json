@@ -1,6 +1,6 @@
 {
   "name": "cli-blueprint",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Blueprint + calctool 多 IDE 安装器：从 cli.tax 自动拉取并分发到本机所有已装 IDE（Codex/DSH/Claude/Cursor/…）。支持 check 更新检测。",
   "type": "module",
   "bin": {
