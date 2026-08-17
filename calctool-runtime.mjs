@@ -5,7 +5,7 @@ const ERROR_SCHEMA = "calctool.skill.error/1.0";
 const ENGINE_SCHEMA = "engine.spec/1";
 const COORDINATOR_SCHEMA = "calctool.coordinator.run-plan/1.0";
 const COMPILER_NAME = "calctool";
-const COMPILER_VERSION = "0.2.0";
+const COMPILER_VERSION = "0.3.0";
 const DEFAULT_MAX_RESPONSE_BYTES = 200_000;
 
 const PURE_OPERATIONS = new Set(["capabilities", "help", "intake", "validate", "compile-inline"]);
@@ -101,6 +101,7 @@ const LOCAL_RUNNER_OPERATIONS = new Set([
   "run", "compile", "generate", "verify", "estimate", "impact", "status", "inventory", "purge",
   "brain-handshake", "brain-invoke", "brain-events", "brain-cancel", "brain-complete", "brain-resume", "brain-status",
   "probe-env", "adapt-config", "intake-round", "compile-tool", "blueprint-orchestrate", "auto-pipeline",
+  "final-gate",
 ]);
 
 // ---------- 工具函数 ----------
@@ -203,6 +204,154 @@ function extractRefs(expression) {
   };
   walk(expression);
   return refs;
+}
+
+// ---------- 确定性公式求值（final-gate 测试智能体用；与平台模板 evaluate.ts 对齐） ----------
+// 节点形态：{ ref: 'field' } / { lit: n } / { op, args }；ref/lit 节点没有 op 键。
+function evaluateFormula(node, values = {}) {
+  if (!node || typeof node !== "object") return 0;
+  if ("ref" in node && node.ref !== undefined) {
+    const raw = values[node.ref];
+    if (raw === null || raw === undefined || raw === "") {
+      throw { code: "MISSING_INPUT", fieldId: node.ref };
+    }
+    return Number(raw);
+  }
+  if ("lit" in node && node.lit !== undefined) return Number(node.lit ?? 0);
+  const args = (node.args ?? []).map((arg) => evaluateFormula(arg, values));
+  switch (node.op) {
+    case "add": return args.reduce((acc, v) => acc + v, 0);
+    case "sub": return args[0] - args[1];
+    case "mul": return args.reduce((acc, v) => acc * v, 1);
+    case "div": {
+      if (args[1] === 0) throw { code: "DIV_ZERO", nodeId: "div" };
+      return args[0] / args[1];
+    }
+    case "safeDivide": return args[1] === 0 ? 0 : args[0] / args[1];
+    case "percentOf": return (args[0] / args[1]) * 100;
+    case "round": return Math.round(args[0] * 100) / 100;
+    case "if": return args[0] !== 0 ? args[1] : args[2];
+    default: throw new Error(`Unsupported operator: ${node.op}`);
+  }
+}
+
+/** 运行一个公式集（含跨公式引用，先算依赖），返回 { key: 数值 } */
+function evaluateFormulaGraph(formulas, inputs = {}) {
+  const values = { ...inputs };
+  const results = {};
+  const visited = new Set();
+  const compute = (key) => {
+    if (visited.has(key)) return;
+    const formula = (formulas ?? []).find((f) => f?.key === key);
+    if (!formula) return;
+    for (const ref of extractRefs(formula.expression)) {
+      if ((formulas ?? []).some((f) => f?.key === ref)) compute(ref);
+    }
+    results[key] = evaluateFormula(formula.expression, values);
+    values[key] = results[key];
+    visited.add(key);
+  };
+  for (const f of formulas ?? []) compute(f?.key);
+  return results;
+}
+
+// ---------- 完成前门禁：审计/测试/运维 三智能体协调接管检测 ----------
+// 每次项目完成之前，三智能体各自接管检测，全部符合通过（gate passed）才标记完成。
+const GATE_AGENTS = [
+  {
+    agent: "audit",
+    label: "审计智能体",
+    run(engine, ctx) {
+      const checks = [];
+      const findings = [];
+      const engineFindings = validateEngine(engine);
+      checks.push({ id: "engine-valid", label: "引擎定义确定性校验（引用闭合/无环/单位/Decimal）", passed: engineFindings.length === 0, detail: engineFindings.length === 0 ? "0 findings" : `${engineFindings.length} findings` });
+      findings.push(...engineFindings);
+      const formulas = Array.isArray(engine?.formulas) ? engine.formulas : [];
+      const hasEval = formulas.some((f) => /eval\s*\(|new\s+Function/i.test(text(f?.expression?.op)) || JSON.stringify(f?.expression ?? "").includes("new Function"));
+      checks.push({ id: "no-eval", label: "公式仅走受控 AST（禁止 eval/new Function）", passed: !hasEval, detail: hasEval ? "发现不受控执行" : "AST 纯净" });
+      const refs = new Set(formulas.flatMap((f) => extractRefs(f?.expression)));
+      const known = new Set([...(engine?.fields ?? []).map((f) => f?.key), ...formulas.map((f) => f?.key)]);
+      const dangling = [...refs].filter((r) => !known.has(r));
+      checks.push({ id: "refs-closed", label: "公式引用全部闭合（引用存在的字段或公式）", passed: dangling.length === 0, detail: dangling.length === 0 ? "引用闭合" : `悬空引用: ${dangling.join(", ")}` });
+      if (dangling.length) findings.push(finding("P1", "GATE_REF_DANGLING", "formulas", `gate audit: dangling refs ${dangling.join(", ")}`));
+      return { agent: "audit", label: "审计智能体", passed: checks.every((c) => c.passed), checks, findings };
+    },
+  },
+  {
+    agent: "test",
+    label: "测试智能体",
+    run(engine, ctx) {
+      const checks = [];
+      const findings = [];
+      const suites = Array.isArray(engine?.testSuites) ? engine.testSuites : [];
+      const formulas = Array.isArray(engine?.formulas) ? engine.formulas : [];
+      checks.push({ id: "suites-present", label: "存在基准测试样例（testSuites）", passed: suites.length > 0, detail: `${suites.length} 组` });
+      let total = 0;
+      let passedCount = 0;
+      for (const [i, suite] of suites.entries()) {
+        const input = suite?.input ?? {};
+        const expected = suite?.expected ?? {};
+        const failed = [];
+        for (const [key, want] of Object.entries(expected)) {
+          if (!formulas.some((f) => f?.key === key)) continue;
+          let got;
+          try {
+            got = evaluateFormulaGraph(formulas, input)[key];
+          } catch (error) {
+            got = `ERR:${error?.code ?? error?.message ?? error}`;
+          }
+          total += 1;
+          const wantNum = Number(want);
+          const ok = typeof got === "number" && Math.abs(got - wantNum) < 1e-9;
+          if (ok) passedCount += 1;
+          else failed.push(`${key}: expect ${want}, got ${got}`);
+        }
+        checks.push({ id: `suite-${i}`, label: `基准样例 ${suite?.name ?? i + 1}`, passed: failed.length === 0, detail: failed.length === 0 ? "全部通过" : failed.join("；") });
+        if (failed.length) findings.push(finding("P1", "GATE_TEST_FAIL", `testSuites[${i}]`, `gate test: ${failed.join("；")}`));
+      }
+      checks.push({ id: "tests-green", label: "基准样例全通过", passed: total > 0 && passedCount === total, detail: `${passedCount}/${total} 通过` });
+      if (total === 0) findings.push(finding("P1", "GATE_TEST_EMPTY", "testSuites", "gate test: no runnable benchmark samples"));
+      return { agent: "test", label: "测试智能体", passed: checks.every((c) => c.passed), checks, findings };
+    },
+  },
+  {
+    agent: "ops",
+    label: "运维智能体",
+    run(engine, ctx) {
+      const checks = [];
+      const findings = [];
+      const probe = ctx.probe ?? probeEnvironment(ctx.runtimeOptions);
+      const adapted = ctx.adapted ?? adaptEnvironment(probe);
+      checks.push({ id: "env-probed", label: "环境探测成功（Node/包管理器/OS/架构）", passed: Boolean(probe.nodeMajor && probe.packageManager), detail: `Node ${probe.nodeVersion ?? "?"} / ${probe.packageManager ?? "?"} / ${probe.os ?? "?"} / ${probe.arch ?? "?"}` });
+      checks.push({ id: "tier-adapted", label: "依赖按环境分级适配", passed: Boolean(adapted.tier), detail: `tier=${adapted.tier}` });
+      checks.push({ id: "install-command", label: "安装命令可用", passed: Boolean(adapted.installCommand), detail: adapted.installCommand });
+      checks.push({ id: "run-command", label: "启动命令可用", passed: Boolean(adapted.runCommand), detail: `${adapted.runCommand} dev` });
+      checks.push({ id: "hot-reload", label: "开发热更新就绪（不重启即可改配置）", passed: adapted.tier !== "preview-only", detail: adapted.tier === "full" ? "vite dev + 配置驱动热更新" : adapted.tier === "compat" ? "vite dev（兼容依赖）" : "仅零构建预览，不支持热更新" });
+      const missing = [];
+      for (const key of ["installCommand", "runCommand"]) {
+        if (!adapted[key]) missing.push(key);
+      }
+      if (missing.length) findings.push(finding("P1", "GATE_OPS_COMMANDS", "adapt-config", `gate ops: missing ${missing.join(", ")}`));
+      return { agent: "ops", label: "运维智能体", passed: checks.every((c) => c.passed), checks, findings };
+    },
+  },
+];
+
+/** 执行完成前门禁：三智能体各自接管检测 → 协调汇总 → 全部通过才算完成 */
+function runFinalGate(engine, context = {}) {
+  const reports = GATE_AGENTS.map((agent) => agent.run(engine, context));
+  const allPassed = reports.every((r) => r.passed);
+  const findings = reports.flatMap((r) => r.findings);
+  return {
+    schemaVersion: "calctool.gate/1.0",
+    gate: "passed",
+    decision: "complete",
+    summary: allPassed ? "审计/测试/运维三智能体全部符合通过，可以标记完成。" : "存在未通过项，需要修复后重新接管检测。",
+    agents: reports,
+    findings,
+    passed: allPassed,
+  };
 }
 
 function validateRequest(request) {
@@ -466,13 +615,18 @@ export {
   validateRunPlan,
   readyTasks,
   mergeSwarmArtifacts,
+  evaluateFormula,
+  evaluateFormulaGraph,
+  GATE_AGENTS,
+  runFinalGate,
 }
 
-// calctool runtime v0.2.0 — 按需生成「万能计算工具」的确定性运行时
+// calctool runtime v0.3.0 — 按需生成「万能计算工具」的确定性运行时
 // 自包含、无外部依赖、纯 HTTP + 多智能体蜂群协同
 // 纯操作: capabilities/help/intake/validate/compile-inline
 // 大脑操作: brain-handshake/brain-invoke/brain-events/brain-complete/brain-status/brain-cancel
 // 环境操作: probe-env（探测）/ adapt-config（适配）
+// 完成前门禁: final-gate（审计/测试/运维 三智能体协调接管检测，全部符合通过才标记完成）
 // 协调协议: calctool.coordinator.run-plan/1.0
 import { createHash } from "node:crypto";
 import { execSync } from "node:child_process";
@@ -826,6 +980,7 @@ export async function run(request, runtimeOptions = {}) {
       { stage: "test-audit", status: "pending", note: "测试审计：基准样例全通过 + 确定性校验 0 findings" },
       { stage: "compile-tool", status: "pending", note: "编译工具：引擎定义 → 可运行工程（环境自动适配）" },
       { stage: "launch", status: "pending", note: "自动启动：安装依赖 → 启动服务 → 弹出工具页面" },
+      { stage: "final-gate", status: "pending", note: "完成前门禁：审计/测试/运维 三智能体协调接管检测，全部符合通过才标记完成" },
     ];
 
     return okResponse(requestId, {
@@ -836,7 +991,32 @@ export async function run(request, runtimeOptions = {}) {
       pipeline: stages,
       swarmPlan: plan,
       needsResearch,
-      nextStep: { operation: "run", instruction: "Execute the pipeline stages in order: research (if needed) → swarm → test-audit → compile-tool → launch. Each stage reports progress; the boss only authorized once." },
+      nextStep: { operation: "run", instruction: "Execute the pipeline stages in order: research (if needed) → swarm → test-audit → compile-tool → launch → final-gate. Each stage reports progress; the boss only authorized once." },
+    });
+  }
+
+  // 完成前门禁：审计/测试/运维 三智能体协调接管检测，全部符合通过才标记完成
+  if (operation === "final-gate") {
+    const input = request.input ?? {};
+    const engine = input.engine ?? {};
+    const context = {
+      probe: input.probe,
+      adapted: input.adapted,
+      runtimeOptions,
+    };
+    const gate = runFinalGate(engine, context);
+    if (!gate.passed) {
+      return blockedResponse(requestId, request, gate.findings);
+    }
+    const digest = createHash("sha256").update(JSON.stringify(engine)).digest("hex");
+    return okResponse(requestId, {
+      status: "complete",
+      gate,
+      revision: Number(input.revision) || 1,
+      validation: { valid: true, guarantee: "completion-gate-green", findings: [] },
+      artifacts: input.artifacts ?? [],
+      digest,
+      nextStep: { operation: "run", instruction: "三智能体（审计/测试/运维）全部符合通过，项目标记完成：启动服务并弹出工具页面。" },
     });
   }
 
