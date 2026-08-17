@@ -19,12 +19,14 @@ clitaxio 的本质只是从 `https://cli.tax/api/public/skills/{code}` 下载两
 
 ```bash
 # 本地运行（无需发布）
-node install.mjs install            # 默认装到 用户级 + 项目级 + codex 三个目标
-node install.mjs install --user     # 只装用户级 ~/.dsh/skills（推荐：全局可用）
-node install.mjs install --project  # 只装当前项目 .dsh/skills
+node install.mjs install            # 默认装到 3 个用户级根（全局可用、不重复）：
+                                    #   ~/.dsh/skills + ~/.agents/skills + ~/.codex/skills
+node install.mjs install --project  # 额外装到当前项目 .dsh/skills + .codex/skills
+node install.mjs install --user     # 只装 ~/.dsh/skills
+node install.mjs install --codex    # 只装 ~/.codex/skills
 node install.mjs update             # 幂等覆盖，等同 install
 node install.mjs list               # 列出包内 skills
-node install.mjs uninstall          # 卸载本包安装的所有 skills
+node install.mjs uninstall          # 卸载本包安装的所有 skills（用户级）
 ```
 
 ## 无限扩展（往包里加 skill）

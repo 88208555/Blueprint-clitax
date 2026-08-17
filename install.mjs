@@ -5,19 +5,25 @@
  * 从本包 `skills/` 目录同步一组 skill 到目标 skills 根目录。
  * 每个子目录（含 SKILL.md + skill.json）即一个 skill；新增/删除子目录后重跑即可扩展。
  *
+ * 默认只装三个用户级根（全局可用、不重复），项目级由 --project 显式指定：
+ *   ~/.dsh/skills        DSH 用户级
+ *   ~/.agents/skills     DSH agents 用户级
+ *   ~/.codex/skills      Codex CLI 用户级
+ *
  * 用法:
- *   node install.mjs install                # 安装到所有默认目标（用户级 ~/.dsh/skills + 项目 .dsh/skills + 项目 .codex/skills）
- *   node install.mjs install --user         # 仅用户级 ~/.dsh/skills
- *   node install.mjs install --project      # 仅当前项目 .dsh/skills
- *   node install.mjs install --codex        # 仅当前项目 .codex/skills（供 Codex CLI 等 IDE 使用）
- *   node install.mjs install --target /abs/path
+ *   node install.mjs install                # 安装到默认用户级根（3 个）
+ *   node install.mjs install --project      # 额外安装到当前项目 .dsh/skills + .codex/skills
+ *   node install.mjs install --user         # 仅 ~/.dsh/skills
+ *   node install.mjs install --agents       # 仅 ~/.agents/skills
+ *   node install.mjs install --codex        # 仅 ~/.codex/skills
+ *   node install.mjs install --target /abs/path   # 仅自定义目录
  *   node install.mjs update                 # 同 install（幂等覆盖）
- *   node install.mjs uninstall              # 从所有默认目标移除本包安装的 skills
+ *   node install.mjs uninstall              # 从默认用户级根移除本包安装的 skills（可加 --project）
  *   node install.mjs list                   # 列出本包包含的 skills
  *
  * 作为 npm 包发布后:  npx dsh-skillpack@latest install
  */
-import { cp, mkdir, readdir, rm, stat } from 'node:fs/promises'
+import { cp, mkdir, readdir, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -27,15 +33,21 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const SKILLS_SRC = join(__dirname, 'skills')
 
 const HOME = homedir()
-const DSH_USER = join(HOME, '.dsh', 'skills')          // DSH 用户级（全局）
-const DSH_PROJECT = join(process.cwd(), '.dsh', 'skills') // DSH 项目级
-const CODEX_PROJECT = join(process.cwd(), '.codex', 'skills') // Codex 兼容
+const CWD = process.cwd()
 
+// 用户级根（默认目标，全局可用，彼此不重复）
 const TARGETS = {
-  user: { label: 'DSH 用户级', path: DSH_USER },
-  project: { label: 'DSH 项目级', path: DSH_PROJECT },
-  codex: { label: 'Codex 兼容', path: CODEX_PROJECT },
+  user: { label: 'DSH 用户级', path: join(HOME, '.dsh', 'skills') },
+  agents: { label: 'DSH agents 级', path: join(HOME, '.agents', 'skills') },
+  codex: { label: 'Codex 用户级', path: join(HOME, '.codex', 'skills') },
 }
+// 项目级根（仅 --project 时追加）
+const PROJECT_TARGETS = {
+  project: { label: 'DSH 项目级', path: join(CWD, '.dsh', 'skills') },
+  codexProject: { label: 'Codex 项目级', path: join(CWD, '.codex', 'skills') },
+}
+
+const DEFAULT_ORDER = ['user', 'agents', 'codex']
 
 function print(line = '') { process.stdout.write(`${line}\n`) }
 
@@ -69,8 +81,7 @@ async function syncAll(targetRoot, { remove = false } = {}) {
 }
 
 function parseTargets(args) {
-  const explicit = args.filter((a) => a.startsWith('--'))
-  const only = explicit.filter((a) => TARGETS[a.slice(2)]).map((a) => a.slice(2))
+  const flags = args.filter((a) => a.startsWith('--'))
   const targetFlag = args.find((a) => a === '--target')
   if (targetFlag) {
     const i = args.indexOf(targetFlag)
@@ -78,8 +89,16 @@ function parseTargets(args) {
     if (!p) { print('--target 需要一个绝对路径'); process.exit(1) }
     return [{ label: '自定义', path: resolve(p) }]
   }
-  if (only.length) return only.map((k) => TARGETS[k])
-  return Object.values(TARGETS) // 默认全部
+  const selected = []
+  for (const key of Object.keys(TARGETS)) {
+    if (flags.includes(`--${key}`)) selected.push(TARGETS[key])
+  }
+  if (flags.includes('--project')) {
+    selected.push(...Object.values(PROJECT_TARGETS))
+  }
+  if (selected.length) return selected
+  // 默认：三个用户级根
+  return DEFAULT_ORDER.map((k) => TARGETS[k])
 }
 
 const [cmd, ...rest] = process.argv.slice(2)
@@ -97,7 +116,7 @@ if (cmd === 'list') {
     print(`[${t.label}] ${t.path}`)
     await syncAll(t.path)
   }
-  print('完成。DSH 会通过 skill-filesystem 自动发现新目录（可立即在新会话中调用）。')
+  print('完成。DSH/Codex 会自动发现新目录（可立即在新会话中调用）。')
 } else if (cmd === 'uninstall') {
   const targets = parseTargets(rest)
   for (const t of targets) {
@@ -107,7 +126,7 @@ if (cmd === 'list') {
   print('完成。')
 } else {
   print(`用法:
-  node install.mjs install [--user|--project|--codex|--target <dir>]
+  node install.mjs install [--user|--agents|--codex|--project|--target <dir>]
   node install.mjs update
   node install.mjs uninstall
   node install.mjs list`)
