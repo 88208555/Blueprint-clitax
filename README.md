@@ -92,11 +92,12 @@ node install.mjs install
 ```
 更新：`git pull && node install.mjs update`
 
-### 方式 C：直接用 clitaxio（如果只想引第三方 skill）
+### 方式 C：直接用 clitaxio（只装单个 IDE，作为对照）
 ```bash
-npx clitaxio@latest install <runtime-code> ~/.codex/skills/<slug>
+npx clitaxio@latest install wvz6zmRWmX
 ```
-本包是更可控的本地化替代：离线可用、可审计、可 git 管理、可批量管理多个 skill、自动多 IDE 分发。
+> ⚠️ 注意：clitaxio **只把 skill 装到默认的 Codex 目录**（单一 IDE），不会自动检测/分发到
+> 其他 IDE，也不处理 `~/.agents/skills` 共享根重复问题。需要多 IDE 分发请用方式 A/B。
 
 ## 目录结构
 
