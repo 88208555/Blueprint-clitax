@@ -1,10 +1,4 @@
-// calctool runtime v0.2.0 — 按需生成「万能计算工具」的确定性运行时
-// 自包含、无外部依赖、纯 HTTP + 多智能体蜂群协同
-// 纯操作: capabilities/help/intake/validate/compile-inline
-// 大脑操作: brain-handshake/brain-invoke/brain-events/brain-complete/brain-status/brain-cancel
-// 协调协议: calctool.coordinator.run-plan/1.0
-import { createHash } from "node:crypto";
-
+// calctool 确定性引擎：协议常量、校验规则与蜂群协同构件（运行时主文件 calctool-runtime.mjs 引用）
 const REQUEST_SCHEMA = "calctool.skill.request/1.0";
 const RESPONSE_SCHEMA = "calctool.skill.response/1.0";
 const ERROR_SCHEMA = "calctool.skill.error/1.0";
@@ -269,15 +263,19 @@ function decomposeRequirementsToRunPlan(requirements) {
     tasks.push(task("formulas", "formula-architect", "编译公式图：JSON AST/单位/依赖", "formula", ["formulas"], ["fields"], "independent"));
   }
   if (hasRules) {
-    tasks.push(task("rules", "rule-architect", "定义规则包：阈值/评分/分级", "rule", ["rules"], ["formulas"], "independent"));
+    // rules 依赖公式任务；无公式时直接依赖字段
+    tasks.push(task("rules", "rule-architect", "定义规则包：阈值/评分/分级", "rule", ["rules"], hasFormulas ? ["formulas"] : ["fields"], "independent"));
   }
   if (hasImport) {
     tasks.push(task("imports", "import-architect", "定义导入映射：Excel/OCR → 字段", "import", ["inputMethod"], ["fields"], "required"));
   }
   if (hasReport) {
-    tasks.push(task("reports", "report-architect", "定义报告模板：指标卡/表格/结论", "report", ["output"], ["formulas"], "required"));
+    // reports 依赖公式任务；无公式时直接依赖字段
+    tasks.push(task("reports", "report-architect", "定义报告模板：指标卡/表格/结论", "report", ["output"], hasFormulas ? ["formulas"] : ["fields"], "required"));
   }
-  tasks.push(task("pages", "page-builder", "生成声明式页面规格：表单/指标卡/报告页", "page", ["output"], hasReport ? ["reports"] : ["fields", "formulas"], "required"));
+  // pages 依赖按存在性选择：reports > formulas > fields（无公式时跳过 formulas）
+  const pageDeps = hasReport ? ["reports"] : hasFormulas ? ["fields", "formulas"] : ["fields"];
+  tasks.push(task("pages", "page-builder", "生成声明式页面规格：表单/指标卡/报告页", "page", ["output"], pageDeps, "required"));
 
   const runId = `run-${createHash("sha256").update(JSON.stringify(requirements)).digest("hex").slice(0, 16)}`;
   const plan = {
@@ -433,7 +431,41 @@ function buildEngine(requirements) {
   };
 }
 
-// ---------- run 入口 ----------
+
+export {
+  COORDINATOR_SCHEMA,
+  DEFAULT_MAX_RESPONSE_BYTES,
+  ERROR_SCHEMA,
+  RESPONSE_SCHEMA,
+  SKILL_NAME,
+  COMPILER_VERSION,
+  SKILL_DESCRIPTION,
+  OPERATION_CATALOG,
+  PURE_OPERATIONS,
+  LOCAL_RUNNER_OPERATIONS,
+  INTAKE_QUESTIONS,
+  CALCTOOL_PARTITION_KINDS,
+  CALCTOOL_REVIEW_MODES,
+  okResponse,
+  blockedResponse,
+  finding,
+  validateRequest,
+  validateEngine,
+  buildEngine,
+  decomposeRequirementsToRunPlan,
+  validateRunPlan,
+  readyTasks,
+  mergeSwarmArtifacts,
+}
+
+// calctool runtime v0.2.0 — 按需生成「万能计算工具」的确定性运行时
+// 自包含、无外部依赖、纯 HTTP + 多智能体蜂群协同
+// 纯操作: capabilities/help/intake/validate/compile-inline
+// 大脑操作: brain-handshake/brain-invoke/brain-events/brain-complete/brain-status/brain-cancel
+// 协调协议: calctool.coordinator.run-plan/1.0
+import { createHash } from "node:crypto";
+
+
 export async function run(request, runtimeOptions = {}) {
   const maxResponseBytes = runtimeOptions.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const requestFindings = validateRequest(request);
