@@ -12,7 +12,8 @@ const PURE_OPERATIONS = new Set(["capabilities", "help", "intake", "validate", "
 
 // 蜂群任务分区类型（calctool 专属）
 const CALCTOOL_PARTITION_KINDS = new Set([
-  "field", "formula", "rule", "import", "report", "page", "contract", "acceptance", "custom",
+  "field", "formula", "rule", "import", "report", "page", "contract", "acceptance",
+  "research", "custom",
 ]);
 // 复核模式（与 blueprint 对齐）
 const CALCTOOL_REVIEW_MODES = new Set(["none", "required", "independent"]);
@@ -99,6 +100,7 @@ const OPERATION_CATALOG = Object.freeze([
 const LOCAL_RUNNER_OPERATIONS = new Set([
   "run", "compile", "generate", "verify", "estimate", "impact", "status", "inventory", "purge",
   "brain-handshake", "brain-invoke", "brain-events", "brain-cancel", "brain-complete", "brain-resume", "brain-status",
+  "probe-env", "adapt-config",
 ]);
 
 // ---------- 工具函数 ----------
@@ -255,16 +257,24 @@ function decomposeRequirementsToRunPlan(requirements) {
     scopeRefs: [goal], dependsOn, inputRefs: [],
     acceptanceGateIds: [`gate-${workItemId}`],
     reviewPolicy: { mode: reviewMode, ...(reviewMode === "independent" ? { reviewerRole: `${role}-reviewer` } : {}) },
-    budget: { maxAttempts: 2, timeoutSeconds: 120, maxOutputBytes: 16384, leaseSeconds: 60 },
+    budget: { maxAttempts: 2, timeoutSeconds: 300, maxOutputBytes: 65536, leaseSeconds: 60 },
   });
 
-  tasks.push(task("fields", "fields-architect", "定义字段目录：类型/单位/必填/校验", "field", ["inputs"], [], "required"));
+  // research 情报收集：老板说了领域（电商/财务/教育…）时自动派发，
+  // 由独立智能体搜索行业标准 + 抓取指定地址，产出领域参考包（可溯源）。
+  const domain = text(r.domain || r.goal || "").slice(0, 80);
+  const hasResearch = text(r.research) === "auto" || Boolean(r.referenceUrls) || /电商|运营|财务|人力|教育|医疗|制造|营销|供应链|库存|广告|直播|私域|定价|薪酬|税务/i.test(domain);
+  if (hasResearch) {
+    tasks.push(task("research", "research-agent", "收集领域情报：行业标准指标/公式口径/基准值（互联网搜索 + 指定地址），产出可溯源参考包", "research",
+      ["domain", ...(r.referenceUrls && r.referenceUrls.length ? ["referenceUrls"] : [])], [], "required"));
+  }
+  tasks.push(task("fields", "fields-architect", "定义字段目录：类型/单位/必填/校验（基于 research 参考包）", "field", ["inputs"], hasResearch ? ["research"] : [], "required"));
   if (hasFormulas) {
-    tasks.push(task("formulas", "formula-architect", "编译公式图：JSON AST/单位/依赖", "formula", ["formulas"], ["fields"], "independent"));
+    tasks.push(task("formulas", "formula-architect", "编译公式图：JSON AST/单位/依赖（基于 research 参考包）", "formula", ["formulas"], ["fields"], "independent"));
   }
   if (hasRules) {
     // rules 依赖公式任务；无公式时直接依赖字段
-    tasks.push(task("rules", "rule-architect", "定义规则包：阈值/评分/分级", "rule", ["rules"], hasFormulas ? ["formulas"] : ["fields"], "independent"));
+    tasks.push(task("rules", "rule-architect", "定义规则包：阈值/评分/分级（基于 research 基准值）", "rule", ["rules"], hasFormulas ? ["formulas"] : ["fields"], "independent"));
   }
   if (hasImport) {
     tasks.push(task("imports", "import-architect", "定义导入映射：Excel/OCR → 字段", "import", ["inputMethod"], ["fields"], "required"));
@@ -462,9 +472,85 @@ export {
 // 自包含、无外部依赖、纯 HTTP + 多智能体蜂群协同
 // 纯操作: capabilities/help/intake/validate/compile-inline
 // 大脑操作: brain-handshake/brain-invoke/brain-events/brain-complete/brain-status/brain-cancel
+// 环境操作: probe-env（探测）/ adapt-config（适配）
 // 协调协议: calctool.coordinator.run-plan/1.0
 import { createHash } from "node:crypto";
+import { execSync } from "node:child_process";
 
+// ---------- 环境自动适配（probe → adapt → fallback） ----------
+
+/** 探测本机环境：Node 版本/包管理器/OS/架构/版本管理工具 */
+function probeEnvironment(runtimeOptions = {}) {
+  const report = { os: null, arch: null, nodeVersion: null, nodeMajor: null,
+    packageManager: null, versionManagers: [], warnings: [] };
+  try {
+    report.os = process.platform;
+    report.arch = process.arch;
+    report.nodeVersion = process.version;
+    report.nodeMajor = Number(String(process.version).replace(/^v/, "").split(".")[0]) || null;
+  } catch (error) {
+    report.warnings.push(`node 探测失败: ${error instanceof Error ? error.message : error}`);
+  }
+  const which = (name) => {
+    try { execSync(`command -v ${name} 2>/dev/null || which ${name} 2>/dev/null`, { shell: "/bin/sh", stdio: ["ignore", "pipe", "ignore"], timeout: 3000 }); return true } catch { return false }
+  };
+  const pmCandidates = ["pnpm", "npm", "yarn", "bun"];
+  for (const pm of pmCandidates) {
+    if (which(pm)) { report.packageManager = pm; break; }
+  }
+  for (const vm of ["nvm", "volta", "fnm", "asdf"]) {
+    if (which(vm)) report.versionManagers.push(vm);
+  }
+  // 架构兼容提示
+  if (report.arch === "arm64" && report.os === "darwin") {
+    report.notes = report.notes ?? [];
+    report.notes.push("arm64 macOS：原生模块优先用预编译 arm64 包，缺失时降级 sql.js");
+  }
+  if (report.os === "win32") {
+    report.notes = report.notes ?? [];
+    report.notes.push("Windows：脚本用 cmd/ps1，路径反斜杠适配");
+  }
+  return report;
+}
+
+/**
+ * 输入探测报告 → 输出适配后的工程配置（依赖版本/命令/脚本/降级路径）。
+ * 规则：Node ≥18 全功能；Node 16 降级依赖；<16 只给 L0 配置预览。
+ */
+function adaptEnvironment(probe, runtimeOptions = {}) {
+  const nodeMajor = Number(probe?.nodeMajor) || 0;
+  const pm = probe?.packageManager || "npm";
+  const tier = nodeMajor >= 18 ? "full" : nodeMajor >= 16 ? "compat" : "preview-only";
+  const config = {
+    tier,
+    packageManager: pm,
+    installCommand: pm === "pnpm" ? "pnpm install" : pm === "yarn" ? "yarn install" : pm === "bun" ? "bun install" : "npm install",
+    runCommand: pm === "pnpm" ? "pnpm run" : pm === "yarn" ? "yarn" : pm === "bun" ? "bun run" : "npm run",
+    shell: probe?.os === "win32" ? "cmd" : "sh",
+    pathSeparator: probe?.os === "win32" ? "\\" : "/",
+    dependencies: {},
+    notes: [...(probe?.notes ?? []), ...(probe?.warnings ?? [])],
+  };
+  if (tier === "full") {
+    config.dependencies = {
+      react: "^19", "react-dom": "^19", "antd": "^6", "@ant-design/x": "^2.9",
+      "decimal.js": "^10", "better-sqlite3": "^13", "vite": "^7", "typescript": "^5",
+    };
+    config.notes.push(`Node ${nodeMajor}：全功能模式（better-sqlite3 原生存储）`);
+  } else if (tier === "compat") {
+    config.dependencies = {
+      react: "^18", "react-dom": "^18", "antd": "^5", "@ant-design/x": "^2.9",
+      "decimal.js": "^10", "sql.js": "^1.14", "vite": "^5", "typescript": "^5",
+    };
+    config.notes.push(`Node ${nodeMajor}：兼容模式（sql.js 纯 WASM 存储替代原生 sqlite）`);
+  } else {
+    config.dependencies = {};
+    config.notes.push(`Node ${nodeMajor}：仅 L0 配置预览（零构建，不安装依赖）`);
+  }
+  return config;
+}
+
+export { probeEnvironment, adaptEnvironment };
 
 export async function run(request, runtimeOptions = {}) {
   const maxResponseBytes = runtimeOptions.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
