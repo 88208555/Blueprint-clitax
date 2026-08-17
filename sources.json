@@ -13,6 +13,13 @@
       "endpoint": "https://cli.tax/api/public/skills/{code}",
       "doc": "https://cli.tax/KKyA6xljUX",
       "description": "calctool 万能计算工具生成器（CLI.Tax 发布）"
+    },
+    {
+      "code": "zj7fTPVh4p",
+      "slug": "swarm",
+      "endpoint": "https://cli.tax/api/public/skills/{code}",
+      "doc": "https://cli.tax/zj7fTPVh4p",
+      "description": "swarm 智能体蜂群编排（CLI.Tax 发布）"
     }
   ]
 }
