@@ -1,6 +1,6 @@
 # dsh-skillpack
 
-**DSH 专属插件包** —— 一键安装 / 更新 / 卸载一组 DSH skills，可无限扩展，可分发给任何人。
+**多 IDE 通用 skill 插件包** —— 一键安装 / 更新 / 卸载一组 skills，自动适配你本机已安装的每个 IDE，可无限扩展，可分发给任何人。
 
 默认包含：`blueprint`（CLI.Tax 工程规划 skill，`https://cli.tax/wvz6zmRWmX`）。
 
@@ -11,28 +11,42 @@ clitaxio 的本质只是从 `https://cli.tax/api/public/skills/{code}` 下载两
 可分发、可扩展的本地插件包**：
 
 - 每个 skill 是一个目录：`skills/<name>/SKILL.md`（+ 可选 `skill.json`、`references/`、`scripts/` 等）
-- DSH 的 `skill-filesystem` 提供方会自动扫描 `~/.dsh/skills`（用户级）、
-  `<项目>/.dsh/skills`（项目级）、`<项目>/.agents/skills`，无需改代码
-- 安装器只负责把 `skills/` 目录同步到这些目标
+- 每个 IDE 都从**它自己的用户级根**发现 skill（如 Codex 扫 `~/.codex/skills`、DSH 扫 `~/.dsh/skills`），
+  安装器按此约定把 skill 分发到每个已安装的 IDE，各一份、互不干扰
+- 共享兼容根 `~/.agents/skills` 默认跳过——它会被多个工具扫描，是"同一 skill 重复出现"的根源
 
 ## 安装 / 更新 / 卸载
 
 ```bash
 # 本地运行（无需发布）
-node install.mjs install            # 默认装到 3 个用户级根（全局可用、不重复）：
-                                    #   ~/.dsh/skills + ~/.agents/skills + ~/.codex/skills
-node install.mjs install --project  # 额外装到当前项目 .dsh/skills + .codex/skills
-node install.mjs install --user     # 只装 ~/.dsh/skills
-node install.mjs install --codex    # 只装 ~/.codex/skills
+node install.mjs install            # 自动检测本机已安装的 IDE，每个各装一份用户级根
+node install.mjs install --all      # 不检测，装到所有已知 IDE（含未安装的）
+node install.mjs install --ide codex --ide dsh   # 只装指定 IDE（可重复）
+node install.mjs install --project  # 额外装到当前项目的项目级根
+node install.mjs install --agents   # 额外装到共享 ~/.agents/skills（警告：可能被多工具重复发现）
+node install.mjs install --target /abs/path      # 只装到自定义目录
 node install.mjs update             # 幂等覆盖，等同 install
 node install.mjs list               # 列出包内 skills
-node install.mjs uninstall          # 卸载本包安装的所有 skills（用户级）
+node install.mjs ides               # 查看已知 IDE 及本机检测结果
+node install.mjs uninstall          # 从相同目标卸载本包安装的 skills
 ```
+
+## 支持的 IDE（每个 IDE 同一套逻辑）
+
+| IDE | 用户级根 | 项目级根 | 说明 |
+|---|---|---|---|
+| Codex | `~/.codex/skills` | `<项目>/.codex/skills` | 目录自动发现；**不要**再往 config.toml 写注册 |
+| DSH | `~/.dsh/skills` | `<项目>/.dsh/skills` | skill-filesystem 自动扫描 |
+| Claude Code | `~/.claude/skills` | `<项目>/.claude/skills` | |
+| Cursor | `~/.cursor/skills` | `<项目>/.cursor/skills` | 未安装则默认跳过 |
+| Gemini CLI | `~/.gemini/skills` | `<项目>/.gemini/skills` | 未安装则默认跳过 |
+
+> 新增 IDE：在 `install.mjs` 的 `IDES` 数组加一行即可，其余逻辑自动生效。
 
 ## 无限扩展（往包里加 skill）
 
 1. 新建目录：`skills/my-new-skill/SKILL.md`
-2. 按 DSH skill 格式写 frontmatter（`name` 必须 kebab-case，含 `description`）：
+2. 按 skill 格式写 frontmatter（`name` 必须 kebab-case，含 `description`）：
    ```markdown
    ---
    name: "my-new-skill"
@@ -62,9 +76,9 @@ npx dsh-skillpack@latest install
 
 ### 方式 C：直接用 clitaxio（如果只想引第三方 skill）
 ```bash
-npx clitaxio@latest install <runtime-code> ~/.dsh/skills/<slug>
+npx clitaxio@latest install <runtime-code> ~/.codex/skills/<slug>
 ```
-本包是更可控的本地化替代：离线可用、可审计、可 git 管理、可批量管理多个 skill。
+本包是更可控的本地化替代：离线可用、可审计、可 git 管理、可批量管理多个 skill、自动多 IDE 分发。
 
 ## 目录结构
 
@@ -81,6 +95,7 @@ dsh-skillpack/
 
 ## 常见问题
 
-- **装完当前会话没立刻出现？** DSH 的 skill 目录在会话初始化时注入，新会话即可发现；文件系统 watcher 也会自动感知变更。
+- **装完当前会话没立刻出现？** skill 目录在会话初始化时注入，新会话即可发现；文件系统 watcher 也会自动感知变更。
+- **Codex 里出现了 2 个同一个 skill？** 常见原因是同时存在 `~/.codex/skills/<name>` 和 `~/.agents/skills/<name>`（或 config.toml 注册条目）。本安装器默认不会装到 `~/.agents/skills`，避免此问题；如已发生，删除 `~/.agents/skills/<name>` 并清理 config.toml 中的 `[[skills.config]]` 条目即可。
 - **想改 skill 内容？** 直接改 `skills/<name>/SKILL.md` 再 `update`，幂等覆盖。
 - **命名要求？** 目录名即 skill 名，必须 kebab-case（如 `my-new-skill`）。
