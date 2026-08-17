@@ -1,0 +1,13 @@
+# 安装产物（本地执行 install 生成，不入库）
+.dsh/
+.codex/
+.agents/
+
+# Node
+node_modules/
+*.tgz
+npm-debug.log*
+
+# 系统
+.DS_Store
+Thumbs.db
