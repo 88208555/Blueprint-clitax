@@ -1,6 +1,6 @@
 domain: ecommerce-ops
 name: 电商运营
-# 说明：本参考包为行业公开资料整理（情报智能体收集），非官方标准；
+# 说明：本参考包为行业公开资料整理（情报智能体 6 轮 web_search 收集），非官方标准；
 # 口径争议处列出差异选项，最终以老板确认为准。
 
 metrics:
@@ -26,12 +26,12 @@ metrics:
     source: https://impact.com/marketing-intelligence/roi-vs-roas-whats-the-best-performance-metric/ , https://observix.ai/blog/roas-vs-roi , https://www.adexchanger.com/data-driven-thinking/roi-vs-roas-which-is-the-better-metric-for-digital-advertisers/
   - key: roi
     label: ROI（投资回报率/投产比）
-    definition: 广告投入带来的净收益（利润）占投入的比例；中国电商运营口语中的「投产比」多数指 ROI（含成本口径）
+    definition: 广告投入带来的净收益（利润）占投入的比例；中国电商口语「投产比」多数指 ROI（含成本口径）
     formula: ROI = (收入 − 广告花费 − 商品/履约等成本) / 广告花费 × 100%；简化口径 ROI = 利润 / 广告费
     source: https://impact.com/marketing-intelligence/roi-vs-roas-whats-the-best-performance-metric/ , https://zhuanlan.zhihu.com/p/134032717 , https://diantuoyi.com/article/26916.html
   - key: repurchaseRate
     label: 复购率
-    definition: 统计窗口内发生≥2次购买的顾客占当期购买顾客总数的比例；与「回购率」（单一商品再次购买）区分
+    definition: 统计窗口内发生≥2次购买的顾客占当期购买顾客总数的比例；与「回购率」区分
     formula: 复购率 = 统计期内复购顾客数 / 统计期内购买顾客总数 × 100%（窗口 30天/90天/自然年）
     source: https://www.finsi.ai/blog/repeat-purchase-rate-ecommerce/ , https://www.runfutureproof.com/terms/repeat-purchase-rate , https://cloud.tencent.com.cn/developer/article/1906279
   - key: uv
@@ -41,7 +41,7 @@ metrics:
     source: https://developer.aliyun.com/article/357958 , https://cloud.tencent.com.cn/developer/article/1483600
   - key: pv
     label: PV（页面浏览量）
-    definition: 页面被浏览的总次数；人均浏览页数 = PV / UV
+    definition: 页面被浏览总次数；人均浏览页数 = PV / UV
     formula: PV = Σ各页面被浏览次数
     source: https://developer.aliyun.com/article/357958 , https://cloud.tencent.com.cn/developer/article/1483600
   - key: ltv
@@ -64,7 +64,7 @@ formulas:
   - key: roiVsRoas
     expression: "ROAS = 广告收入/广告费（只看收入）；ROI = 利润/广告费（扣除成本）"
     attribution: 广告收入须按选定归因口径统计
-    notes: "口径争议：ROAS 不含商品成本/物流/退款，盈亏平衡 ROAS = 1/毛利率；ROI 含成本更真实；国内「投产比」直通车常指 ROAS、财务语境常指 ROI。工具同时提供两者并标注分子口径。"
+    notes: "口径争议：ROAS 不含成本，盈亏平衡 ROAS = 1/毛利率；ROI 含成本更真实；国内「投产比」直通车常指 ROAS、财务语境常指 ROI。工具同时提供两者并标注分子口径。"
     source: https://impact.com/marketing-intelligence/roi-vs-roas-whats-the-best-performance-metric/ , https://www.adexchanger.com/data-driven-thinking/roi-vs-roas-which-is-the-better-metric-for-digital-advertisers/ , https://zhuanlan.zhihu.com/p/134032717
   - key: gmvVsNet
     expression: "GMV = 全部订单金额（含未付款/已退款/含税）；实收 = GMV − 退款 − 折扣 − 税费 − 取消订单"
@@ -89,7 +89,7 @@ formulas:
   - key: ltvCac
     expression: "LTV/CAC = 客户生命周期价值 / 客户获取成本；LTV = 客单价 × 购买频次 × 生命周期"
     attribution: LTV 用利润还是营收口径影响结论；CAC 含不含自然流量成本需定义
-    notes: "LTV/CAC ≥ 3 常被视为健康（见 benchmarks）"
+    notes: "LTV/CAC ≥ 3 常被视为健康"
     source: https://www.chargebee.com/resources/glossaries/ltv-cac-ratio , https://echai.ventures/d2c/d2c-unit-economics/ltv-cac-ratio-when-profitable
   - key: funnelStages
     expression: "漏斗：曝光 → 点击 → 访问 → 加购 → 下单 → 支付；各环节转化率 = 下一环节人数 / 当前环节人数"
@@ -104,10 +104,10 @@ benchmarks:
     healthy: 「好」的 ROAS 常引 ≥4:1（Shopify）；2025 平均约 2.87（Upcounting）；盈亏平衡取决于毛利率
     source: https://www.shopify.com/in/enterprise/blog/how-to-increase-roas , https://www.upcounting.com/blog/average-ecommerce-roas , https://niblin.com/blog/what-is-a-good-roas
   - metric: aov
-    healthy: 未找到统一权威基准——客单价随品类/客群差异极大，仅可参考按类目分组的第三方数据
+    healthy: 未找到统一权威基准——客单价随品类/客群差异极大（服饰 vs 3C vs 家具），仅可参考按类目分组的第三方数据
     source: https://fullmetrix.com/en/blog/panier-moyen-par-secteur-ecommerce , https://cdn.metorik.com/blog/average-order-value-benchmarks-woocommerce
   - metric: repurchaseRate
-    healthy: 行业均值约 25%-30%；类目差异大：时尚约 26% 下限，宠物可达 80%+ 上限
+    healthy: 行业均值约 25%-30%（finsi.ai）；类目差异大：时尚约 26% 下限，宠物（Chewy）可达 80%+ 上限
     source: https://www.finsi.ai/blog/repeat-purchase-rate-ecommerce/ , https://eightx.co/blog/average-ecommerce-repeat-purchase-rate-by-vertical-2026
   - metric: ltvCac
     healthy: LTV/CAC ≥ 3:1 为健康，>5:1 可能意味着获客投入不足
@@ -131,17 +131,28 @@ configurableOptions:
 sources:
   - url: https://www.wallstreetprep.com/knowledge/gross-merchandise-value-gmv/
   - url: https://www.aftership.com/glossary/gross-merchandise-value
+  - url: https://www.shopify.com/ph/blog/gross-merchandise-value
+  - url: https://www.jiemian.com/article/4608249.html
+  - url: https://www.jiushuyun.com/blog/ds/30546.html
+  - url: https://www.xinlingshou.com/wiki/gmv
   - url: https://www.shopify.com/sg/blog/retail-conversion-rate
   - url: https://www.hostinger.com/tutorials/ecommerce-conversion-rate/
   - url: https://www.smartinsights.com/ecommerce/ecommerce-analytics/ecommerce-conversion-rates/
+  - url: https://moz.com/community/q/topic/58633/should-i-use-sessions-or-unique-visitors-to-work-out-my-ecommerce-conversion-rate/
   - url: https://help.klaviyo.com/hc/en-us/articles/360000676712
   - url: https://www.shopify.com/blog/average-order-value
+  - url: https://www.jiushuyun.com/blog/jsyty/65019.html
   - url: https://impact.com/marketing-intelligence/roi-vs-roas-whats-the-best-performance-metric/
   - url: https://observix.ai/blog/roas-vs-roi
   - url: https://www.adexchanger.com/data-driven-thinking/roi-vs-roas-which-is-the-better-metric-for-digital-advertisers/
+  - url: https://zhuanlan.zhihu.com/p/134032717
+  - url: https://diantuoyi.com/article/26916.html
   - url: https://www.finsi.ai/blog/repeat-purchase-rate-ecommerce/
   - url: https://www.runfutureproof.com/terms/repeat-purchase-rate
+  - url: https://eightx.co/blog/average-ecommerce-repeat-purchase-rate-by-vertical-2026
   - url: https://cloud.tencent.com.cn/developer/article/1906279
+  - url: https://developer.aliyun.com/article/357958
+  - url: https://cloud.tencent.com.cn/developer/article/1483600
   - url: https://www.shopify.com/blog/customer-lifetime-value
   - url: https://www.aftership.com/glossary/lifetime-value
   - url: https://www.chargebee.com/resources/glossaries/ltv-cac-ratio
@@ -151,3 +162,11 @@ sources:
   - url: https://www.adadvisor.ai/docs/learn/attribution-models
   - url: https://www.ipaylinks.com/information_details.php?id=18681
   - url: https://trustedwebeservices.com/ecommerce-sales-funnel-optimisation/
+  - url: https://www.geekseller.com/blog/what-is-a-good-conversion-rate-for-ecommerce-websites/
+  - url: https://www.gorgias.com/blog/ecommerce-conversion-rate
+  - url: https://www.shopify.com/in/enterprise/blog/how-to-increase-roas
+  - url: https://www.upcounting.com/blog/average-ecommerce-roas
+  - url: https://niblin.com/blog/what-is-a-good-roas
+  - url: https://fullmetrix.com/en/blog/panier-moyen-par-secteur-ecommerce
+  - url: https://cdn.metorik.com/blog/average-order-value-benchmarks-woocommerce
+  - url: https://ecomhint.com/blog/ecommerce-conversion-rate-benchmarks-by-industry
