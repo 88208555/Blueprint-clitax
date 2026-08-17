@@ -1,13 +1,14 @@
 {
-  "name": "dsh-skillpack",
+  "name": "cli-blueprint",
   "version": "0.1.0",
-  "description": "DSH 专属插件包：一键安装/更新/卸载一组 DSH skills（默认含 blueprint），可无限扩展。",
+  "description": "Blueprint skill 多 IDE 安装器：从 cli.tax 自动拉取并分发到本机所有已装 IDE（Codex/DSH/Claude/Cursor/…）。",
   "type": "module",
   "bin": {
-    "dsh-skillpack": "install.mjs"
+    "cli-blueprint": "install.mjs"
   },
   "files": [
     "install.mjs",
+    "sources.json",
     "skills"
   ],
   "engines": {
@@ -15,9 +16,12 @@
   },
   "license": "MIT",
   "keywords": [
-    "dsh",
+    "blueprint",
     "skill",
-    "plugin",
-    "deepseek-harness"
+    "cli.tax",
+    "clitax",
+    "codex",
+    "agent",
+    "installer"
   ]
 }

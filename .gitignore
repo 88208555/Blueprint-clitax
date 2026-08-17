@@ -3,6 +3,9 @@
 .codex/
 .agents/
 
+# npm 认证（含 token，绝不入库）
+.npmrc
+
 # Node
 node_modules/
 *.tgz
