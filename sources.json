@@ -8,10 +8,10 @@
       "description": "Blueprint 工程规划 CLI skill（CLI.Tax 发布）"
     },
     {
-      "code": "VjFfeR6wdB",
+      "code": "KKyA6xljUX",
       "slug": "calctool",
       "endpoint": "https://cli.tax/api/public/skills/{code}",
-      "doc": "https://cli.tax/VjFfeR6wdB",
+      "doc": "https://cli.tax/KKyA6xljUX",
       "description": "calctool 万能计算工具生成器（CLI.Tax 发布）"
     }
   ]
