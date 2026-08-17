@@ -100,7 +100,7 @@ const OPERATION_CATALOG = Object.freeze([
 const LOCAL_RUNNER_OPERATIONS = new Set([
   "run", "compile", "generate", "verify", "estimate", "impact", "status", "inventory", "purge",
   "brain-handshake", "brain-invoke", "brain-events", "brain-cancel", "brain-complete", "brain-resume", "brain-status",
-  "probe-env", "adapt-config", "intake-round",
+  "probe-env", "adapt-config", "intake-round", "compile-tool",
 ]);
 
 // ---------- 工具函数 ----------
@@ -681,6 +681,51 @@ export async function run(request, runtimeOptions = {}) {
       artifacts: [{ path: `${engine.engineId}/manifest.yaml`, kind: "engine-manifest", engineId: engine.engineId, digest }],
       engine,
       nextStep: { operation: "brain-handshake", instruction: "For multi-agent swarm generation, call brain-handshake to negotiate the brain mode, then brain-invoke to dispatch swarm tasks." },
+    });
+  }
+
+  // 生成可运行工具工程：引擎定义 → 工程文件清单（模板由执行层按 adapt-config 落地）
+  if (operation === "compile-tool") {
+    const input = request.input ?? {};
+    const engine = input.engine ?? buildEngine(input.requirements ?? {});
+    const findings = validateEngine(engine);
+    if (findings.length) {
+      return blockedResponse(requestId, request, findings);
+    }
+    const probe = probeEnvironment(runtimeOptions);
+    const adapted = adaptEnvironment(probe);
+    const digest = createHash("sha256").update(JSON.stringify(engine)).digest("hex");
+    const fields = Array.isArray(engine.fields) ? engine.fields : [];
+    const formulas = Array.isArray(engine.formulas) ? engine.formulas : [];
+    const pages = [
+      { id: 'input', label: '录入', kind: 'form', fields: fields.map((f) => f.key) },
+      { id: 'dashboard', label: '指标卡', kind: 'metrics', metrics: formulas.map((f) => f.key) },
+      { id: 'report', label: '报告', kind: 'report' },
+    ];
+    const files = [
+      { path: 'package.json', kind: 'manifest', note: `依赖由 adapt-config 决定（tier=${adapted.tier}, pm=${adapted.packageManager}）` },
+      { path: 'src/engine-definition.json', kind: 'engine', engineId: engine.engineId, digest },
+      { path: 'src/App.tsx', kind: 'app-shell', note: 'Ant Design X 应用壳（表单/指标卡/报告页）' },
+      { path: 'src/engine/evaluate.ts', kind: 'formula-runner', note: 'JSON AST + decimal.js 求值' },
+      { path: 'src/engine/recompute.ts', kind: 'dependency-graph', note: '依赖图增量重算' },
+      { path: 'src/store.ts', kind: 'storage', note: adapted.tier === 'full' ? 'better-sqlite3 持久化' : 'sql.js 纯 WASM' },
+      { path: 'vite.config.ts', kind: 'build' },
+      { path: 'README.md', kind: 'run-instructions', note: `${adapted.installCommand} && ${adapted.runCommand} dev` },
+    ];
+    return okResponse(requestId, {
+      status: "compiled",
+      engineId: engine.engineId,
+      validation: { valid: true, guarantee: "engine-definition-green", findings: [] },
+      environment: { tier: adapted.tier, packageManager: adapted.packageManager, nodeMajor: probe.nodeMajor, os: probe.os, arch: probe.arch },
+      pages,
+      files,
+      commands: {
+        install: adapted.installCommand,
+        run: `${adapted.runCommand} dev`,
+        build: `${adapted.runCommand} build`,
+      },
+      digest,
+      nextStep: { operation: "run", instruction: "Scaffold the tool from the file manifest, install dependencies with the adapted command, and start the dev server." },
     });
   }
 
