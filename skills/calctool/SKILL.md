@@ -18,8 +18,10 @@ description: '按需生成「万能计算工具」：用户输入一个领域需
 2. 情报蜂群（research）        —— 自动派情报智能体搜索行业标准/抓指定地址，
    产出可溯源参考包（老板说"电商"等关键词时自动触发）
   ↓
-3. 蜂群执行（brain-invoke/complete）—— 需求自动拆解为 fields/formulas/rules/
-   imports/reports/pages 任务，依赖图驱动并行，独立复核，确定性合并
+3. 蜂群编排（swarm-orchestrate）—— 需求自动拆解为 fields/formulas/rules/
+   imports/reports/pages 项目 JSON，交给 swarm 大脑编排：企业组织架构派单 →
+   认领 → 执行 → 回传 → 红绿灯监控 → 固定运维（心跳/回收/接替/继承）
+   → 安全守卫（注入检测），确定性合并
   ↓
 4. 编译工具（compile-tool）    —— 引擎定义 → 可运行工程文件清单
    （App 壳/公式引擎/存储/构建，页面自动生成：录入/指标卡/报告）
@@ -109,29 +111,28 @@ defaultLocale: zh-CN
 - 发布为版本化引擎，任何公式/字段/阈值变化都创建新版本，不原地修改
 - 输出：可运行的在线工具 + 引擎定义包 + 验收报告 + 完成前门禁结论
 
-## 多智能体蜂群模式（大脑协同，推荐复杂工具用）
+## 多智能体蜂群模式（接入 swarm 编排，推荐复杂工具用）
 
-单智能体 `compile-inline` 适合简单工具；复杂工具（多字段 + 多公式 + 规则 + 导入 + 报告）用**蜂群协同**，多智能体并行生成、独立复核、确定性合并——准确率更高、产出更强。
+单智能体 `compile-inline` 适合简单工具；复杂工具（多字段 + 多公式 + 规则 + 导入 + 报告）用**蜂群编排（swarm）**：通过智能体大脑调度创建 N 个子智能体，企业级组织架构规则 + 项目 JSON 任务派单/认领/回传 + 红绿灯 + 固定运维与安全守卫——准确率更高、产出更强、可观测可自治。
 
-### 大脑模式（brain-handshake）
-- `ide`：用当前 IDE 的多智能体（subagent）执行蜂群（默认）
-- `hermes_local`：用用户本地安装的 Hermes 执行蜂群
+### 接入方式（swarm-orchestrate）
 
-### 蜂群流程（协议 calctool.coordinator.run-plan/1.0）
-
-1. **brain-handshake**：协商大脑模式（ide/hermes_local），返回蜂群能力
-2. **brain-invoke**：传需求 → **自动拆解**为蜂群任务（按需派发，需要几个派几个）：
+1. **swarm-orchestrate**：传需求 → calctool **自动拆解**为项目 JSON（需要几个派几个）：
+   - `research` 情报收集（有领域关键词才派）
    - `fields` 字段目录（入口，总是有）
    - `formulas` 公式图（有公式才派）· 独立复核
    - `rules` 规则包（有规则才派）· 独立复核
    - `imports` 导入映射（有导入才派）
    - `reports` 报告模板（有报告才派）
    - `pages` 页面规格（总是有）
-   依赖图驱动：fields 先 → formulas/imports 并行 → reports → pages；maxParallel 控制并发
-3. **brain-invoke 批量派发**：每个就绪 work item 派给一个独立智能体，收集产物
-4. **brain-events / brain-status**：流式收集事件、查询蜂群状态（就绪/运行/阻塞）
-5. **brain-complete**：提交全部产物 → **确定性合并**为引擎定义 → 校验 → 发布
-6. **brain-cancel**：随时取消蜂群
+2. **swarm 大脑编排**：项目 JSON 交给 swarm 运行时（https://cli.tax/zj7fTPVh4p）：
+   - `org-chart`：按企业组织架构创建 N 个子智能体（board/dispatcher/ops/security-guard/workers）
+   - `dispatch`：依赖图驱动派单（fields 先 → formulas/imports 并行 → reports → pages）
+   - `claim`：worker 认领任务；`report`：回传结果
+   - `traffic-light`：每任务/智能体实时绿/黄/红状态 + 进度/错误汇报
+   - `ops`：固定运维——心跳检测，卡死/死亡自动回收，派新智能体继承任务续跑
+   - `security-guard`：固定安全守卫——注入/危险指令检测、异常警报
+3. **确定性合并**：收集全部 worker 回传 → 合并为引擎定义 → 校验 → 发布
 
 ### 准确率与用户控制
 - **准确率**：合并后引擎定义必须通过确定性校验（引用闭合/公式链/单位/Decimal/无环），0 findings 才发布
@@ -158,6 +159,11 @@ defaultLocale: zh-CN
 - `references/declarative-pages.md` —— 声明式页面规格系统（表单/指标/报告渲染）
 - `references/import-ocr.md` —— 导入与 OCR（Excel 映射/图片识别/草稿确认）
 - `references/finance-example.md` —— 经营健康诊断完整范例（50 字段 → 10 指标 → 报告）
+
+### Blueprint 协同（可选）
+`brain-handshake` 时可选择 `blueprintEnabled`：生成引擎定义后，先交给 Blueprint 技能规划工具开发蓝图
+（`blueprint-orchestrate` → `https://cli.tax/wvz6zmRWmX`，operation `compile-inline`），
+再回到蜂群执行开发任务，验收标准全部可追溯。不开启时直接蜂群生成，全程框架一致。
 
 ## 安全规则
 

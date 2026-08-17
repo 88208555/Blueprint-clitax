@@ -39,8 +39,16 @@ description: '通过智能体大脑调度创建 N 个子智能体，用企业级
 - 用户需要企业级分工、任务认领回传、进度红绿灯的可观测协作
 - 用户需要自动回收卡死智能体并让继任者继承任务的自治能力
 - 用户需要内置安全守卫（防注入、异常警报）的多智能体系统
+- 用户希望任务先由 Blueprint 技能规划为可追溯蓝图，再交给蜂群执行（可选协同）
 
 不要用于：单智能体就能完成的简单任务（用单 agent 即可）；与任务编排无关的纯计算。
+
+## Blueprint 协同（可选）
+
+intake 时可选择 `blueprintEnabled`：任务先交给 Blueprint 技能规划为可追溯的工程蓝图
+（结构/引用/验收全部闭合），再回到蜂群派单执行。开启后 org-chart 的下一步是 `blueprint-bridge`，
+由它生成 blueprint 请求负载（`https://cli.tax/wvz6zmRWmX`，operation `compile-inline`），
+拿到蓝图后继续 `dispatch → claim → report`，红绿灯与运维/安全守卫保持不变。
 
 ## 核心原则
 

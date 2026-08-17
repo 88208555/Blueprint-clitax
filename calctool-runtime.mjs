@@ -5,7 +5,7 @@ const ERROR_SCHEMA = "calctool.skill.error/1.0";
 const ENGINE_SCHEMA = "engine.spec/1";
 const COORDINATOR_SCHEMA = "calctool.coordinator.run-plan/1.0";
 const COMPILER_NAME = "calctool";
-const COMPILER_VERSION = "0.3.0";
+const COMPILER_VERSION = "0.4.0";
 const DEFAULT_MAX_RESPONSE_BYTES = 200_000;
 
 const PURE_OPERATIONS = new Set(["capabilities", "help", "intake", "validate", "compile-inline"]);
@@ -101,7 +101,7 @@ const LOCAL_RUNNER_OPERATIONS = new Set([
   "run", "compile", "generate", "verify", "estimate", "impact", "status", "inventory", "purge",
   "brain-handshake", "brain-invoke", "brain-events", "brain-cancel", "brain-complete", "brain-resume", "brain-status",
   "probe-env", "adapt-config", "intake-round", "compile-tool", "blueprint-orchestrate", "auto-pipeline",
-  "final-gate",
+  "final-gate", "swarm-orchestrate",
 ]);
 
 // ---------- 工具函数 ----------
@@ -621,7 +621,7 @@ export {
   runFinalGate,
 }
 
-// calctool runtime v0.3.0 — 按需生成「万能计算工具」的确定性运行时
+// calctool runtime v0.4.0 — 按需生成「万能计算工具」的确定性运行时（蜂群生成接入 swarm 编排）
 // 自包含、无外部依赖、纯 HTTP + 多智能体蜂群协同
 // 纯操作: capabilities/help/intake/validate/compile-inline
 // 大脑操作: brain-handshake/brain-invoke/brain-events/brain-complete/brain-status/brain-cancel
@@ -748,7 +748,7 @@ export async function run(request, runtimeOptions = {}) {
   if (operation === "intake") {
     return okResponse(requestId, {
       questions: INTAKE_QUESTIONS,
-      nextStep: { operation: "compile-inline", instruction: "Turn the user's answers into an engine definition, call compile-inline with input.requirements, and present the generated definition after a clean validation." },
+      nextStep: { operation: "compile-inline", instruction: "Turn the user's answers into an engine definition, call compile-inline with input.requirements, and present the generated definition after a clean validation. For multi-agent swarm generation call brain-handshake (optionally with blueprintEnabled for Blueprint collaboration) before compile-inline." },
     });
   }
 
@@ -834,7 +834,7 @@ export async function run(request, runtimeOptions = {}) {
       validation: { valid: true, guarantee: "engine-definition-green", findings: [] },
       artifacts: [{ path: `${engine.engineId}/manifest.yaml`, kind: "engine-manifest", engineId: engine.engineId, digest }],
       engine,
-      nextStep: { operation: "brain-handshake", instruction: "For multi-agent swarm generation, call brain-handshake to negotiate the brain mode, then brain-invoke to dispatch swarm tasks." },
+      nextStep: { operation: "swarm-orchestrate", instruction: "For multi-agent swarm generation, call swarm-orchestrate to hand the decomposed tasks to the swarm brain (org-chart dispatch, traffic lights, Ops/Security Guard autonomy)." },
     });
   }
 
@@ -1029,18 +1029,63 @@ export async function run(request, runtimeOptions = {}) {
       return blockedResponse(requestId, request, [finding("P0", "BRAIN_MODE_UNSUPPORTED", "input.brainMode", `Unsupported brain mode ${brainMode}; supported: ${supportedModes.join(", ")}`)]);
     }
     const swarmEnabled = input.swarmEnabled !== false;
+    const blueprintEnabled = input.blueprintEnabled === true || String(input.blueprintEnabled ?? "").toLowerCase() === "yes";
     return okResponse(requestId, {
       brainMode,
       requestedBrainMode: brainMode,
       brainUsed: true,
       capabilities: {
         swarm: swarmEnabled,
+        blueprint: blueprintEnabled,
         coordinatorSchema: COORDINATOR_SCHEMA,
         partitionKinds: [...CALCTOOL_PARTITION_KINDS],
         reviewModes: [...CALCTOOL_REVIEW_MODES],
         maxParallelDefault: 4,
       },
-      nextStep: { operation: "brain-invoke", instruction: "Send the requirements with operation brain-invoke to decompose and dispatch the swarm." },
+      nextStep: blueprintEnabled
+        ? { operation: "blueprint-orchestrate", instruction: "Blueprint collaboration is enabled: call blueprint-orchestrate to plan the tool development, then execute it with the swarm." }
+        : { operation: "brain-invoke", instruction: "Send the requirements with operation brain-invoke to decompose and dispatch the swarm." },
+    });
+  }
+
+  if (operation === "swarm-orchestrate") {
+    const input = request.input ?? {};
+    const requirements = input.requirements ?? {};
+    const plan = decomposeRequirementsToRunPlan(requirements);
+    const errors = validateRunPlan(plan);
+    if (errors.length) {
+      return blockedResponse(requestId, request, errors.map((message, i) => finding("P0", "RUN_PLAN_INVALID", `runPlan[${i}]`, message)));
+    }
+    // 把 calctool 的蜂群任务清单转换为 swarm 项目 JSON（唯一事实源）
+    const project = {
+      schemaVersion: "swarm.project/1.0",
+      name: text(requirements.goal || "calctool-engine"),
+      tasks: plan.tasks.map((task, index) => ({
+        taskId: task.workItemId,
+        title: task.objective,
+        priority: "high",
+        dependsOn: task.dependsOn,
+      })),
+    };
+    return okResponse(requestId, {
+      status: "orchestrated",
+      engineId: plan.engineId,
+      project,
+      swarm: {
+        protocol: "swarm.skill.request/1.0",
+        endpoint: "https://cli.tax/zj7fTPVh4p",
+        flow: [
+          { step: "org-chart", note: "大脑按企业组织架构创建 N 个子智能体（board/dispatcher/ops/security-guard/workers）" },
+          { step: "dispatch", note: "把项目 JSON 任务派单给 worker（依赖图驱动）" },
+          { step: "claim", note: "worker 认领任务并执行" },
+          { step: "report", note: "worker 回传结果（进度/产物/错误）" },
+          { step: "traffic-light", note: "每个任务/智能体实时绿/黄/红状态" },
+          { step: "ops", note: "固定运维：心跳检测、回收卡死智能体、派新智能体继承任务续跑" },
+          { step: "security-guard", note: "固定安全守卫：注入/危险指令检测、异常警报" },
+        ],
+        instruction: "POST project to https://cli.tax/zj7fTPVh4p (operation org-chart) with the swarm protocol; the swarm brain dispatches workers by org-chart rules, monitors traffic lights, and Ops/Security Guard take over autonomously.",
+      },
+      nextStep: { operation: "run", instruction: "Feed the swarm project JSON to the swarm runtime; collect worker reports, then merge into the engine definition and run final-gate." },
     });
   }
 
