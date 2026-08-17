@@ -100,7 +100,7 @@ const OPERATION_CATALOG = Object.freeze([
 const LOCAL_RUNNER_OPERATIONS = new Set([
   "run", "compile", "generate", "verify", "estimate", "impact", "status", "inventory", "purge",
   "brain-handshake", "brain-invoke", "brain-events", "brain-cancel", "brain-complete", "brain-resume", "brain-status",
-  "probe-env", "adapt-config", "intake-round", "compile-tool", "blueprint-orchestrate",
+  "probe-env", "adapt-config", "intake-round", "compile-tool", "blueprint-orchestrate", "auto-pipeline",
 ]);
 
 // ---------- 工具函数 ----------
@@ -787,6 +787,56 @@ export async function run(request, runtimeOptions = {}) {
       fields, formulas,
       blueprintRequest,
       nextStep: { operation: "run", instruction: "POST the blueprintRequest to https://cli.tax/wvz6zmRWmX (operation compile-inline) to get the development blueprint, then execute it with the swarm." },
+    });
+  }
+
+  // 全自动流水线：老板仅授权，之后自动执行全链路
+  // 授权 → 情报 → 对话收敛(可跳过) → 蜂群生成 → 测试审计 → 编译 → 启动
+  if (operation === "auto-pipeline") {
+    const input = request.input ?? {};
+    const requirements = input.requirements ?? {};
+    const goal = text(requirements.goal || "生成计算工具");
+    const engineId = text(requirements.engineId) || goal.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "calc-engine";
+    const autoAuthorized = input.authorized === true;  // 老板授权标记
+    const skipDialogue = input.skipDialogue !== false; // 默认跳过对话（用领域模板直接生成）
+    const domainRef = input.domainReference;            // 领域参考包（可选）
+
+    // 阶段 1：授权检查
+    if (!autoAuthorized) {
+      return blockedResponse(requestId, request, [finding("P1", "AUTH_REQUIRED", "input.authorized",
+        "老板需要先授权：本流水线将自动调用情报搜索、AI 模型、Blueprint 编排等能力，可能增加调用消耗。授权后全程自动执行，不再提示。")]);
+    }
+
+    // 阶段 2：情报收集（若领域参考包未提供，标记需要 research 任务）
+    const needsResearch = !domainRef && /电商|运营|财务|人力|教育|医疗|制造|营销|供应链|库存|广告|直播|私域|定价|薪酬|税务/i.test(goal);
+
+    // 阶段 3：自动拆解蜂群（含 research）
+    const plan = decomposeRequirementsToRunPlan({ ...requirements, domain: requirements.domain || goal });
+    const planErrors = validateRunPlan(plan);
+    if (planErrors.length) {
+      return blockedResponse(requestId, request, planErrors.map((m, i) => finding("P0", "RUN_PLAN_INVALID", `runPlan[${i}]`, m)));
+    }
+
+    // 阶段 4-7：完整流水线编排（返回各阶段指令，执行层按序自动跑）
+    const stages = [
+      { stage: "authorize", status: autoAuthorized ? "done" : "blocked", note: "老板已授权" },
+      ...(needsResearch ? [{ stage: "research", status: "pending", note: "情报蜂群：搜索行业标准，产出领域参考包" }] : []),
+      ...(skipDialogue ? [] : [{ stage: "intake-round", status: "pending", note: "顾问式对话：收敛指标/公式/口径（可跳过）" }]),
+      { stage: "swarm", status: "pending", note: `蜂群生成：${plan.tasks.length} 个任务并行（${plan.tasks.map(t => t.workItemId).join('/')}）` },
+      { stage: "test-audit", status: "pending", note: "测试审计：基准样例全通过 + 确定性校验 0 findings" },
+      { stage: "compile-tool", status: "pending", note: "编译工具：引擎定义 → 可运行工程（环境自动适配）" },
+      { stage: "launch", status: "pending", note: "自动启动：安装依赖 → 启动服务 → 弹出工具页面" },
+    ];
+
+    return okResponse(requestId, {
+      status: "pipeline-started",
+      engineId,
+      goal,
+      authorized: autoAuthorized,
+      pipeline: stages,
+      swarmPlan: plan,
+      needsResearch,
+      nextStep: { operation: "run", instruction: "Execute the pipeline stages in order: research (if needed) → swarm → test-audit → compile-tool → launch. Each stage reports progress; the boss only authorized once." },
     });
   }
 
