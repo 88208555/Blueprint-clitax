@@ -1,6 +1,10 @@
-# dsh-skillpack
+# cli-blueprint
 
-**多 IDE 通用 skill 插件包** —— 一键安装 / 更新 / 卸载一组 skills，自动适配你本机已安装的每个 IDE，可无限扩展，可分发给任何人。
+**Blueprint skill 多 IDE 安装器** —— 一条命令从 cli.tax 拉取并分发到本机所有已装 IDE，可无限扩展。
+
+```bash
+npx cli-blueprint@latest install
+```
 
 默认包含：`blueprint`（CLI.Tax 工程规划 skill，`https://cli.tax/wvz6zmRWmX`）。
 
@@ -72,20 +76,21 @@ node install.mjs uninstall          # 从相同目标卸载本包安装的 skill
 
 ## 分发给别人
 
-### 方式 A：Git 仓库（推荐，最简单）
-把本目录推到一个 git 仓库，使用者：
+### 方式 A：npm 一条命令（推荐，最简单）
+已发布到 npm（`cli-blueprint@0.1.0`），使用者只需：
 ```bash
-git clone <repo-url> && cd dsh-skillpack && node install.mjs install
+npx cli-blueprint@latest install
+```
+自动完成：从 cli.tax 拉取 blueprint → 检测本机已装 IDE → 分发到每个 IDE。
+更新：同一命令（`@latest` 自动拉新版）。
+
+### 方式 B：Git 仓库
+```bash
+git clone https://github.com/88208555/Blueprint-clitax.git
+cd Blueprint-clitax
+node install.mjs install
 ```
 更新：`git pull && node install.mjs update`
-
-### 方式 B：发布为 npm 包（一条命令装）
-本包已配好 `bin`，发布后使用者只需：
-```bash
-npx dsh-skillpack@latest install
-```
-更新：同一命令（`@latest` 自动拉新版）。
-> 注意 npm 官方源对包名唯一性有要求；内部使用可部署私有 registry（如 Verdaccio）。
 
 ### 方式 C：直接用 clitaxio（如果只想引第三方 skill）
 ```bash
@@ -96,10 +101,10 @@ npx clitaxio@latest install <runtime-code> ~/.codex/skills/<slug>
 ## 目录结构
 
 ```
-dsh-skillpack/
+cli-blueprint/
 ├── install.mjs       # 安装器（Node ≥18，零依赖）：pull / install / uninstall / list / ides
 ├── sources.json      # ★ cli.tax skill 源清单（code → 自动拉取），扩展就加一行
-├── package.json      # npm 包元数据（可发布）
+├── package.json      # npm 包元数据（cli-blueprint）
 ├── README.md
 └── skills/           # skill 内容（pull 生成，可提交 git 离线兜底）
     └── blueprint/
