@@ -100,7 +100,7 @@ const OPERATION_CATALOG = Object.freeze([
 const LOCAL_RUNNER_OPERATIONS = new Set([
   "run", "compile", "generate", "verify", "estimate", "impact", "status", "inventory", "purge",
   "brain-handshake", "brain-invoke", "brain-events", "brain-cancel", "brain-complete", "brain-resume", "brain-status",
-  "probe-env", "adapt-config", "intake-round", "compile-tool",
+  "probe-env", "adapt-config", "intake-round", "compile-tool", "blueprint-orchestrate",
 ]);
 
 // ---------- 工具函数 ----------
@@ -726,6 +726,67 @@ export async function run(request, runtimeOptions = {}) {
       },
       digest,
       nextStep: { operation: "run", instruction: "Scaffold the tool from the file manifest, install dependencies with the adapted command, and start the dev server." },
+    });
+  }
+
+  // blueprint 自动调用桥：calctool 生成引擎定义后，自动调用 blueprint 编排开发流程
+  if (operation === "blueprint-orchestrate") {
+    const input = request.input ?? {};
+    const engine = input.engine ?? {};
+    const goal = text(input.goal || engine.name || "生成计算工具");
+    const fields = Array.isArray(engine.fields) ? engine.fields.map((f) => f?.key) : [];
+    const formulas = Array.isArray(engine.formulas) ? engine.formulas.map((f) => `${f?.key} = ${text(f?.expression?.op)}`) : [];
+    // 生成 blueprint 请求负载：blueprint envelope 在 input 内层（符合 SKILL.md 协议）
+    const blueprintRequest = {
+      input: {
+        schemaVersion: "blueprint.skill.request/1.0",
+        requestId: `calctool-bp-${createHash("sha256").update(JSON.stringify(engine)).digest("hex").slice(0, 8)}`,
+        operation: "compile-inline",
+        input: {
+          blueprint: {
+          schemaVersion: "blueprint.ir/1.0",
+          blueprintId: `tool-dev-${engine.engineId || "calc"}`,
+          title: `${goal} 开发流程`,
+          revision: 1,
+          entryNodeId: "node-engine",
+          baseline: {
+            summary: goal,
+            facts: [
+              { id: "fact-engine", status: "confirmed", statement: `引擎定义已确定（${fields.length} 字段 / ${formulas.length} 公式）` },
+              { id: "fact-pages", status: "confirmed", statement: "页面已规划：录入/指标卡/报告" },
+            ],
+          },
+          domains: [{ id: "domain-dev", name: "开发域" }],
+          modules: [
+            { id: "module-frontend", name: "前端工程", domainId: "domain-dev" },
+            { id: "module-engine", name: "公式引擎", domainId: "domain-dev" },
+            { id: "module-test", name: "测试验收", domainId: "domain-dev" },
+          ],
+          nodes: [
+            { id: "node-engine", entry: true, moduleId: "module-engine", title: "实现公式引擎（AST + Decimal + 增量重算）", inputs: [], outputs: [{ name: "engine", exposed: true }], requirementRefs: ["fact-engine"] },
+            { id: "node-frontend", moduleId: "module-frontend", title: "搭建 Ant Design X 界面（录入/指标卡/报告）", inputs: [{ name: "engine" }], outputs: [{ name: "ui", exposed: true }], requirementRefs: ["fact-engine"] },
+            { id: "node-test", moduleId: "module-test", title: "写测试并验收（基准样例全通过）", inputs: [{ name: "ui" }], outputs: [{ name: "tests", exposed: true }], requirementRefs: ["fact-pages"] },
+          ],
+          edges: [
+            { id: "e1", type: "data", fromNodeId: "node-engine", fromOutput: "engine", toNodeId: "node-frontend", toInput: "engine" },
+            { id: "e2", type: "data", fromNodeId: "node-frontend", fromOutput: "ui", toNodeId: "node-test", toInput: "ui" },
+          ],
+          acceptanceCriteria: [
+            { id: "ac1", statement: "界面三页可用（录入/指标卡/报告）", nodeRefs: ["node-frontend"] },
+            { id: "ac2", statement: "公式引擎基准样例全部通过", nodeRefs: ["node-engine"] },
+            { id: "ac3", statement: "测试验收完成，工具可运行", nodeRefs: ["node-test"] },
+          ],
+        },
+        },
+      },
+    };
+    return okResponse(requestId, {
+      status: "orchestrated",
+      blueprintEndpoint: "https://cli.tax/wvz6zmRWmX",
+      goal,
+      fields, formulas,
+      blueprintRequest,
+      nextStep: { operation: "run", instruction: "POST the blueprintRequest to https://cli.tax/wvz6zmRWmX (operation compile-inline) to get the development blueprint, then execute it with the swarm." },
     });
   }
 
