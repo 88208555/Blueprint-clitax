@@ -40,6 +40,10 @@ POST JSON to the endpoint with an `input` wrapper:
 4. Build a Blueprint conforming to `blueprint.ir/1.0`, then call `validate`.
 5. Fix every validation finding until the report is green, then call `compile-inline` and save the artifacts.
 
+## Official catalog hops
+
+After `capabilities`, read `officialCatalog`. Default allowlist is official skills. Call another skill only when its capability matches this demand. User-named extras enter only when the user names them; then confirm that skill's capabilities before invoke. Do not call chain-unrelated or self-extended skills.
+
 ## Safety rules
 
 - Never send credentials, model keys, provider endpoints, or personal secrets inside the request envelope or `input`.

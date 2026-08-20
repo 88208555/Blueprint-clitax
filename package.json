@@ -1,27 +1,21 @@
 {
-  "name": "cli-blueprint",
-  "version": "0.2.2",
-  "description": "Blueprint + calctool 多 IDE 安装器：从 cli.tax 自动拉取并分发到本机所有已装 IDE（Codex/DSH/Claude/Cursor/…）。支持 check 更新检测。",
-  "type": "module",
   "bin": {
-    "cli-blueprint": "install.mjs"
+    "cli-blueprint": "./cli.mjs"
   },
+  "description": "Blueprint skill installer for CLI.Tax: compile one goal into an executable, verifiable engineering blueprint.",
   "files": [
-    "install.mjs",
-    "sources.json",
-    "skills"
+    "cli.mjs",
+    "README.md",
+    "skill/SKILL.md",
+    "skill/skill.json"
   ],
-  "engines": {
-    "node": ">=18"
+  "license": "UNLICENSED",
+  "name": "cli-blueprint",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/88208555/blueprint-clitax.git"
   },
-  "license": "MIT",
-  "keywords": [
-    "blueprint",
-    "skill",
-    "cli.tax",
-    "clitax",
-    "codex",
-    "agent",
-    "installer"
-  ]
+  "type": "module",
+  "version": "5.0.2"
 }
