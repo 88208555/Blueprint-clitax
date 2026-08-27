@@ -1,9 +1,10 @@
 /**
- * 五个官方技能共用这一份安装器。packages/*-cli/installer.mjs 必须与本文件字节一致。
+ * 八个官方技能共用这一份安装器。packages/*-cli/installer.mjs 必须与本文件字节一致。
  * 禁止第二套超时、第二套版本来源、第二套 bin 名。
  */
-import { copyFile, mkdir, writeFile } from 'node:fs/promises'
-import { existsSync, readFileSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import { constants, existsSync, readFileSync } from 'node:fs'
+import { cp, lstat, mkdir, open, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { stdin, stdout } from 'node:process'
 import { createInterface } from 'node:readline/promises'
@@ -12,6 +13,18 @@ import { fileURLToPath } from 'node:url'
 export const LOOKUP_TIMEOUT_MS = 8000
 export const CALL_TIMEOUT_MS = 120_000
 const INSTALL_META = 'install-meta.json'
+const FEEDBACK_API_PATH = '/api/v1/telemetry/skill-usage'
+const BRAIN_CLIENT_TOKEN_FILE_ENV = 'CLITAX_BRAIN_CLIENT_TOKEN_FILE'
+const BRAIN_CLIENT_TOKEN_FILE_VERSION = 'member-brain.client-token-file/1.0'
+const BRAIN_CLIENT_AUTH_SCHEME = 'BrainClient'
+const BRAIN_CLIENT_TOKEN_FILE_MAX_BYTES = 16_384
+const BRAIN_CLIENT_TOKEN_FILE_MODE = 0o600
+const FEEDBACK_COMMENT_MAX = 500
+const FEEDBACK_SCORE_MIN = 0
+const FEEDBACK_SCORE_MAX = 100
+const BRAIN_CLIENT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
+const FEEDBACK_INVOCATION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const FEEDBACK_SCORE_PATTERN = /^(?:0|[1-9]\d{0,2})$/
 
 function asObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -112,12 +125,113 @@ export async function callOfficialSkill(context, operation, input) {
   return payload
 }
 
+export function feedbackCommandInput(args) {
+  const invocationId = requiredString(args[1], 'feedback invocation id')
+  if (!FEEDBACK_INVOCATION_PATTERN.test(invocationId)) {
+    throw new Error('feedback invocation id must be the UUID returned by a real skill response')
+  }
+  const scoreText = requiredString(args[2], 'feedback score')
+  if (!FEEDBACK_SCORE_PATTERN.test(scoreText)) {
+    throw new Error(`feedback score must be an integer between ${FEEDBACK_SCORE_MIN} and ${FEEDBACK_SCORE_MAX}`)
+  }
+  const score = Number(scoreText)
+  if (!Number.isInteger(score) || score < FEEDBACK_SCORE_MIN || score > FEEDBACK_SCORE_MAX) {
+    throw new Error(`feedback score must be between ${FEEDBACK_SCORE_MIN} and ${FEEDBACK_SCORE_MAX}`)
+  }
+  const userComment = args.slice(3).join(' ').trim()
+  if (!userComment) throw new Error('feedback comment is required')
+  if (userComment.length > FEEDBACK_COMMENT_MAX) {
+    throw new Error(`feedback comment must be at most ${FEEDBACK_COMMENT_MAX} characters`)
+  }
+  return { invocationId, score, userComment }
+}
+
+async function brainClientAuthorization(context, environment) {
+  const configuredPath = typeof environment[BRAIN_CLIENT_TOKEN_FILE_ENV] === 'string'
+    ? environment[BRAIN_CLIENT_TOKEN_FILE_ENV].trim() : ''
+  if (!configuredPath) throw new Error(`${BRAIN_CLIENT_TOKEN_FILE_ENV} is required`)
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    throw new Error('Brain Client token file ownership cannot be verified')
+  }
+  const tokenFilePath = resolve(configuredPath)
+  const linkStatus = await lstat(tokenFilePath)
+  if (linkStatus.isSymbolicLink()) throw new Error('Brain Client token file cannot be a symlink')
+  const handle = await open(tokenFilePath, constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const status = await handle.stat()
+    if (!status.isFile() || status.uid !== process.getuid()
+      || (status.mode & 0o777) !== BRAIN_CLIENT_TOKEN_FILE_MODE
+      || status.size < 1 || status.size > BRAIN_CLIENT_TOKEN_FILE_MAX_BYTES) {
+      throw new Error('Brain Client token file must be owned by the current user with mode 0600')
+    }
+    const tokenFile = asObject(JSON.parse(await handle.readFile('utf8')), 'Brain Client token file')
+    const expectedKeys = ['authorizationScheme', 'endpoint', 'schemaVersion', 'token']
+    if (Object.keys(tokenFile).sort().join('\n') !== expectedKeys.join('\n')) {
+      throw new Error('Brain Client token file contains unknown or missing fields')
+    }
+    const endpoint = new URL(requiredString(tokenFile.endpoint, 'Brain Client endpoint'))
+    if (tokenFile.schemaVersion !== BRAIN_CLIENT_TOKEN_FILE_VERSION
+      || tokenFile.authorizationScheme !== BRAIN_CLIENT_AUTH_SCHEME
+      || endpoint.origin !== new URL(context.endpoint).origin
+      || endpoint.pathname !== FEEDBACK_API_PATH || endpoint.search || endpoint.hash
+      || endpoint.username || endpoint.password
+      || !BRAIN_CLIENT_TOKEN_PATTERN.test(tokenFile.token)) {
+      throw new Error('Brain Client token file authority is invalid')
+    }
+    return `${BRAIN_CLIENT_AUTH_SCHEME} ${tokenFile.token}`
+  } finally {
+    await handle.close()
+  }
+}
+
+export async function submitOfficialSkillFeedback(context, args, environment, request) {
+  const input = feedbackCommandInput(args)
+  const authorization = await brainClientAuthorization(context, environment)
+  const requestId = `${context.runtimeCode}-${randomUUID()}`
+  let response
+  try {
+    response = await request(new URL(FEEDBACK_API_PATH, context.endpoint), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: authorization,
+      },
+      body: JSON.stringify({
+        requestId,
+        skillId: context.runtimeCode,
+        invocationId: input.invocationId,
+        score: input.score,
+        userComment: input.userComment,
+      }),
+      signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
+    })
+  } catch {
+    throw new Error('cli.tax feedback request failed')
+  }
+  let payload
+  try {
+    payload = asObject(await response.json(), 'cli.tax feedback response')
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('cli.tax feedback response')) throw error
+    throw new Error(`cli.tax feedback failed: non-JSON response (HTTP ${response.status})`)
+  }
+  if (!response.ok || payload.ok !== true) {
+    throw new Error(`cli.tax feedback failed: HTTP ${response.status}`)
+  }
+  if (payload.requestId !== requestId || typeof payload.id !== 'string'
+    || !FEEDBACK_INVOCATION_PATTERN.test(payload.id)
+    || typeof payload.duplicated !== 'boolean') {
+    throw new Error('cli.tax feedback response authority is invalid')
+  }
+  return { id: payload.id, requestId, duplicated: payload.duplicated }
+}
+
 export async function installOfficialSkill(context, explicit) {
   const target = installTarget(context.skillName, explicit)
   await mkdir(target, { recursive: true })
   const previous = readInstallMeta(target)
-  await copyFile(join(context.skillDir, 'SKILL.md'), join(target, 'SKILL.md'))
-  await copyFile(join(context.skillDir, 'skill.json'), join(target, 'skill.json'))
+  await rm(join(target, 'references'), { recursive: true, force: true })
+  await cp(context.skillDir, target, { recursive: true, force: true })
   const installed = asObject(JSON.parse(readFileSync(join(target, 'skill.json'), 'utf8')), 'installed skill.json')
   const installedVersion = requiredString(installed.version, 'installed skill.json version')
   await writeFile(join(target, INSTALL_META), `${JSON.stringify({
@@ -170,7 +284,6 @@ export function defaultUsage(context, extraLines) {
     '      Check whether the installed skill has a newer version.',
     `  npx ${context.npmName}@latest run`,
     '      Run the skill handshake: discover capabilities and collect intake answers.',
-    '',
     `Endpoint: ${context.endpoint}`,
   ]
   if (extraLines?.length) lines.push('', ...extraLines)
@@ -227,6 +340,10 @@ export async function dispatchOfficialSkillCli(options) {
     if (command === 'install') await installOfficialSkill(context, argument)
     else if (command === 'check') await checkOfficialSkill(context, argument)
     else if (command === 'run') await options.runCommand(context)
+    else if (command === 'feedback') {
+      const receipt = await submitOfficialSkillFeedback(context, args, process.env, fetch)
+      console.log(`${context.displayName} feedback accepted: ${receipt.id}`)
+    }
     else if (command === 'help' || command === '--help' || command === '-h') {
       console.log(options.usage ? options.usage(context) : defaultUsage(context, options.extraUsageLines))
     } else {
