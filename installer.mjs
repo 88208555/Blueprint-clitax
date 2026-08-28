@@ -2,29 +2,33 @@
  * 八个官方技能共用这一份安装器。packages/*-cli/installer.mjs 必须与本文件字节一致。
  * 禁止第二套超时、第二套版本来源、第二套 bin 名。
  */
-import { randomUUID } from 'node:crypto'
-import { constants, existsSync, readFileSync } from 'node:fs'
-import { cp, lstat, mkdir, open, rm, writeFile } from 'node:fs/promises'
+import { existsSync, readFileSync } from 'node:fs'
+import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { stdin, stdout } from 'node:process'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
+import {
+  LOOKUP_TIMEOUT_MS,
+  brokerCommandInput,
+  invokeCommandInput,
+  invokeOfficialSkill,
+} from './broker.mjs'
 
-export const LOOKUP_TIMEOUT_MS = 8000
-export const CALL_TIMEOUT_MS = 120_000
+export {
+  CALL_TIMEOUT_MS,
+  LOOKUP_TIMEOUT_MS,
+  authoritativeEvaluation,
+  brainClientAuthorization,
+  brainClientTokenPath,
+  brokerCommandInput,
+  callOfficialSkill,
+  invokeCommandInput,
+  invokeOfficialSkill,
+} from './broker.mjs'
+
 const INSTALL_META = 'install-meta.json'
-const FEEDBACK_API_PATH = '/api/v1/telemetry/skill-usage'
-const BRAIN_CLIENT_TOKEN_FILE_ENV = 'CLITAX_BRAIN_CLIENT_TOKEN_FILE'
-const BRAIN_CLIENT_TOKEN_FILE_VERSION = 'member-brain.client-token-file/1.0'
-const BRAIN_CLIENT_AUTH_SCHEME = 'BrainClient'
-const BRAIN_CLIENT_TOKEN_FILE_MAX_BYTES = 16_384
-const BRAIN_CLIENT_TOKEN_FILE_MODE = 0o600
-const FEEDBACK_COMMENT_MAX = 500
-const FEEDBACK_SCORE_MIN = 0
-const FEEDBACK_SCORE_MAX = 100
-const BRAIN_CLIENT_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
-const FEEDBACK_INVOCATION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const FEEDBACK_SCORE_PATTERN = /^(?:0|[1-9]\d{0,2})$/
+const BROKER_STDIN_MAX_BYTES = 1_048_576
 
 function asObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -94,138 +98,6 @@ export async function fetchLatestVersion(context) {
   }
 }
 
-export async function callOfficialSkill(context, operation, input) {
-  const requestId = `${context.npmName}-${Date.now()}`
-  const response = await fetch(context.endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      input: {
-        schemaVersion: context.schemaVersion,
-        requestId,
-        operation,
-        input,
-      },
-    }),
-    signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-  })
-  let payload
-  try {
-    payload = await response.json()
-  } catch {
-    throw new Error(`${context.displayName} ${operation} failed: non-JSON response (HTTP ${response.status}). Check ${context.endpoint}.`)
-  }
-  if (!response.ok || payload?.ok !== true) {
-    const message = payload?.error?.message
-    if (typeof message !== 'string' || !message.trim()) {
-      throw new Error(`${context.displayName} ${operation} failed: HTTP ${response.status}`)
-    }
-    throw new Error(`${context.displayName} ${operation} failed: ${message}`)
-  }
-  return payload
-}
-
-export function feedbackCommandInput(args) {
-  const invocationId = requiredString(args[1], 'feedback invocation id')
-  if (!FEEDBACK_INVOCATION_PATTERN.test(invocationId)) {
-    throw new Error('feedback invocation id must be the UUID returned by a real skill response')
-  }
-  const scoreText = requiredString(args[2], 'feedback score')
-  if (!FEEDBACK_SCORE_PATTERN.test(scoreText)) {
-    throw new Error(`feedback score must be an integer between ${FEEDBACK_SCORE_MIN} and ${FEEDBACK_SCORE_MAX}`)
-  }
-  const score = Number(scoreText)
-  if (!Number.isInteger(score) || score < FEEDBACK_SCORE_MIN || score > FEEDBACK_SCORE_MAX) {
-    throw new Error(`feedback score must be between ${FEEDBACK_SCORE_MIN} and ${FEEDBACK_SCORE_MAX}`)
-  }
-  const userComment = args.slice(3).join(' ').trim()
-  if (!userComment) throw new Error('feedback comment is required')
-  if (userComment.length > FEEDBACK_COMMENT_MAX) {
-    throw new Error(`feedback comment must be at most ${FEEDBACK_COMMENT_MAX} characters`)
-  }
-  return { invocationId, score, userComment }
-}
-
-async function brainClientAuthorization(context, environment) {
-  const configuredPath = typeof environment[BRAIN_CLIENT_TOKEN_FILE_ENV] === 'string'
-    ? environment[BRAIN_CLIENT_TOKEN_FILE_ENV].trim() : ''
-  if (!configuredPath) throw new Error(`${BRAIN_CLIENT_TOKEN_FILE_ENV} is required`)
-  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
-    throw new Error('Brain Client token file ownership cannot be verified')
-  }
-  const tokenFilePath = resolve(configuredPath)
-  const linkStatus = await lstat(tokenFilePath)
-  if (linkStatus.isSymbolicLink()) throw new Error('Brain Client token file cannot be a symlink')
-  const handle = await open(tokenFilePath, constants.O_RDONLY | constants.O_NOFOLLOW)
-  try {
-    const status = await handle.stat()
-    if (!status.isFile() || status.uid !== process.getuid()
-      || (status.mode & 0o777) !== BRAIN_CLIENT_TOKEN_FILE_MODE
-      || status.size < 1 || status.size > BRAIN_CLIENT_TOKEN_FILE_MAX_BYTES) {
-      throw new Error('Brain Client token file must be owned by the current user with mode 0600')
-    }
-    const tokenFile = asObject(JSON.parse(await handle.readFile('utf8')), 'Brain Client token file')
-    const expectedKeys = ['authorizationScheme', 'endpoint', 'schemaVersion', 'token']
-    if (Object.keys(tokenFile).sort().join('\n') !== expectedKeys.join('\n')) {
-      throw new Error('Brain Client token file contains unknown or missing fields')
-    }
-    const endpoint = new URL(requiredString(tokenFile.endpoint, 'Brain Client endpoint'))
-    if (tokenFile.schemaVersion !== BRAIN_CLIENT_TOKEN_FILE_VERSION
-      || tokenFile.authorizationScheme !== BRAIN_CLIENT_AUTH_SCHEME
-      || endpoint.origin !== new URL(context.endpoint).origin
-      || endpoint.pathname !== FEEDBACK_API_PATH || endpoint.search || endpoint.hash
-      || endpoint.username || endpoint.password
-      || !BRAIN_CLIENT_TOKEN_PATTERN.test(tokenFile.token)) {
-      throw new Error('Brain Client token file authority is invalid')
-    }
-    return `${BRAIN_CLIENT_AUTH_SCHEME} ${tokenFile.token}`
-  } finally {
-    await handle.close()
-  }
-}
-
-export async function submitOfficialSkillFeedback(context, args, environment, request) {
-  const input = feedbackCommandInput(args)
-  const authorization = await brainClientAuthorization(context, environment)
-  const requestId = `${context.runtimeCode}-${randomUUID()}`
-  let response
-  try {
-    response = await request(new URL(FEEDBACK_API_PATH, context.endpoint), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: authorization,
-      },
-      body: JSON.stringify({
-        requestId,
-        skillId: context.runtimeCode,
-        invocationId: input.invocationId,
-        score: input.score,
-        userComment: input.userComment,
-      }),
-      signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS),
-    })
-  } catch {
-    throw new Error('cli.tax feedback request failed')
-  }
-  let payload
-  try {
-    payload = asObject(await response.json(), 'cli.tax feedback response')
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('cli.tax feedback response')) throw error
-    throw new Error(`cli.tax feedback failed: non-JSON response (HTTP ${response.status})`)
-  }
-  if (!response.ok || payload.ok !== true) {
-    throw new Error(`cli.tax feedback failed: HTTP ${response.status}`)
-  }
-  if (payload.requestId !== requestId || typeof payload.id !== 'string'
-    || !FEEDBACK_INVOCATION_PATTERN.test(payload.id)
-    || typeof payload.duplicated !== 'boolean') {
-    throw new Error('cli.tax feedback response authority is invalid')
-  }
-  return { id: payload.id, requestId, duplicated: payload.duplicated }
-}
-
 export async function installOfficialSkill(context, explicit) {
   const target = installTarget(context.skillName, explicit)
   await mkdir(target, { recursive: true })
@@ -283,21 +155,52 @@ export function defaultUsage(context, extraLines) {
     `  npx ${context.npmName}@latest check [directory]`,
     '      Check whether the installed skill has a newer version.',
     `  npx ${context.npmName}@latest run`,
-    '      Run the skill handshake: discover capabilities and collect intake answers.',
+    "      Run this skill's applicability or onboarding flow; only a real HTTP invocation can trigger automatic evaluation.",
+    `  npx ${context.npmName}@latest invoke <operation> <JSON-object>`,
+    '      Invoke through the restricted local broker; a valid real HTTP invocation submits one authority-bound evaluation.',
+    `  npx ${context.npmName}@latest broker`,
+    '      Read one {"operation":"...","input":{...}} request from JSON stdin.',
+    'Credential: CLITAX_BRAIN_CLIENT_TOKEN_FILE (the broker reads it; never pass the token).',
     `Endpoint: ${context.endpoint}`,
   ]
   if (extraLines?.length) lines.push('', ...extraLines)
   return lines.join('\n')
 }
 
+function brokerDependencies() {
+  return { environment: process.env, request: fetch }
+}
+
+async function readBrokerSource(input) {
+  let source = ''
+  for await (const chunk of input) {
+    source += chunk
+    if (Buffer.byteLength(source, 'utf8') > BROKER_STDIN_MAX_BYTES) {
+      throw new Error(`broker request must be at most ${BROKER_STDIN_MAX_BYTES} bytes`)
+    }
+  }
+  if (!source.trim()) throw new Error('broker request is required on stdin')
+  return source
+}
+
+async function runBrokerInvocation(context, commandInput) {
+  const invocation = await invokeOfficialSkill(
+    context, commandInput.operation, commandInput.input, brokerDependencies(),
+  )
+  console.log(JSON.stringify(invocation))
+  return invocation
+}
+
 export async function runIntakeHandshake(context, spec) {
-  const capabilities = await callOfficialSkill(context, 'capabilities', {})
+  const invocation = await invokeOfficialSkill(context, 'capabilities', {}, brokerDependencies())
+  const capabilities = invocation.response
   const output = capabilities.output && typeof capabilities.output === 'object' ? capabilities.output : {}
   const skill = output.skill && typeof output.skill === 'object' ? output.skill : {}
   const version = typeof skill.version === 'string' && skill.version.trim()
     ? skill.version.trim()
     : context.skillVersion
   console.log(`${context.displayName} ${version}`)
+  console.log(`Automatic feedback accepted: ${invocation.feedback.id}`)
   if (typeof spec.afterCapabilities === 'function') spec.afterCapabilities(output)
   const readline = createInterface({ input: stdin, output: stdout })
   const answers = []
@@ -340,9 +243,9 @@ export async function dispatchOfficialSkillCli(options) {
     if (command === 'install') await installOfficialSkill(context, argument)
     else if (command === 'check') await checkOfficialSkill(context, argument)
     else if (command === 'run') await options.runCommand(context)
-    else if (command === 'feedback') {
-      const receipt = await submitOfficialSkillFeedback(context, args, process.env, fetch)
-      console.log(`${context.displayName} feedback accepted: ${receipt.id}`)
+    else if (command === 'invoke') await runBrokerInvocation(context, invokeCommandInput(args))
+    else if (command === 'broker') {
+      await runBrokerInvocation(context, brokerCommandInput(await readBrokerSource(stdin)))
     }
     else if (command === 'help' || command === '--help' || command === '-h') {
       console.log(options.usage ? options.usage(context) : defaultUsage(context, options.extraUsageLines))

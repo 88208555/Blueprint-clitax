@@ -5,7 +5,7 @@ description: '把一个目标编译为可执行、可验证、可追溯的工程
 
 # Blueprint Skill
 
-Package version: v7.0.19
+Package version: v7.0.25
 
 远端 Hermes 编译器版本：0.4.0（独立于 npm 包版本）
 
@@ -250,17 +250,17 @@ After `capabilities`, read `officialCatalog`. Default allowlist is official skil
 | B3 | 业务模板库与粗粒度模式 | 规划中 | 当前没有模板操作，`template` 与 `coarseMode` 均不是受支持输入。 |
 | B4 | 验收回传、开放问题闭环、Validator 桥接 | 规划中 | 当前没有 `acceptance-report`、`answer-questions` 或 Validator 桥接操作。 |
 
-只调用 `capabilities` 返回的五个操作。不要根据规划中条目构造请求，也不要把 npm 包版本 `v7.0.19` 与远端 Hermes 编译器版本 `0.4.0` 混为一谈。
+只调用 `capabilities` 返回的五个操作。不要根据规划中条目构造请求，也不要把 npm 包版本 `v7.0.25` 与远端 Hermes 编译器版本 `0.4.0` 混为一谈。
 
-## 反馈通道
+## 受限调用与自动评价闭环
 
-评价只能由 IDE / 智能体自动回传，严禁人类干预：
+- IDE / 智能体必须通过本包 `invoke` 或 JSON-stdin `broker` 调用，不得直接拼装技能 HTTP 请求，也不得读取 BrainClient token。
+- broker 从 `CLITAX_BRAIN_CLIENT_TOKEN_FILE` 读取身份；macOS/Linux 文件必须为当前 broker 账户所有且权限 `0600`，Windows 文件必须位于受限 `%LOCALAPPDATA%\CLI.Tax\broker` 目录。
+- broker 只需要 Brain Client HTTPS、受限身份文件和调用方显式传入的路径，本身不需要完整磁盘访问。若要保证 IDE 无法读取身份文件，必须把 broker 放进独立低权限系统账户或沙箱服务，并只暴露受限 IPC；broker 与 IDE 同账户运行时，`0600` 不能隔离二者，禁止声称令牌已隔离。
+- broker 只用 `Authorization: BrainClient …` 发起一次 runtime 请求。HTTP 成功后必须保留响应顶层原始 `feedbackReceiptId`、`feedbackInvocationId` 和 `feedbackEvaluation.digest`，不得生成、猜测、复用或跨调用转移。
+- Brain Client 服务端必须严格绑定请求/响应的 `requestId` 和 `schemaVersion`，再根据真实状态、验证结果、服务端耗时与 findings 生成并持久化权威评分、评语和摘要。broker 不得生成分数或评语。
+- 同一次 runtime 请求在服务端事务内生成并持久化评价，再返回 `feedbackReceiptId`、`feedbackInvocationId` 和权威摘要；broker 只验证已提交回执，不发起第二次评价写入。`not-reported`、验证不完整、P0/P1 findings、`blocked` 或 `failed` 都不得生成好评。
+- 缺少凭证或 ID、身份不匹配、摘要不匹配、响应非法以及任何 HTTP 失败都必须显式失败，不得静默、不重试成重复评价。
+- 本地 CLI 不提供手工评分或评语提交命令，人类不得选择技能分数或填写技能评价；日常聊天不属于评价协议。
 
-1. 仅当一次真实技能 HTTP 调用成功，并且响应顶层包含 `feedbackInvocationId` 时，调用方才可进入评价流程。
-2. 调用方必须使用本次响应的原始 ID，按真实执行结果生成整数分数（0–100）和真实评语，再自动执行：
-   `npx cli-blueprint@latest feedback <feedbackInvocationId> <score> <comment...>`
-3. 自动回传必须使用会员中心 Brain 客户端生成的同一身份文件，并通过 `CLITAX_BRAIN_CLIENT_TOKEN_FILE` 指向该 `0600` 文件；服务端以会员账号实名入库，不接受匿名评价。
-4. 禁止伪造、猜测、复用或跨调用转移 `feedbackInvocationId`；禁止让人类选择分数、填写评价或代为执行命令。
-5. 缺少会员客户端身份或 ID、分数越界、空评语、响应不合法及任何 HTTP 失败都必须视为回传失败，不得记为成功。
-
-日常交流走技能详情页的独立聊天通道，不使用 `feedback` 命令，也不计入评价、评分或首页跑马灯。
+调用示例：`npx cli-blueprint@latest invoke <operation> '<JSON对象>'`。IDE 集成可向 `npx cli-blueprint@latest broker` 的 stdin 发送 `{"operation":"capabilities","input":{}}`。
