@@ -24,6 +24,7 @@ const VALIDATION_STATES = new Set(['passed', 'failed', 'incomplete'])
 const EVALUATION_SCHEMA = 'skill-automatic-evaluation/1.0'
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const REQUEST_SCHEMA_PATTERN = /^([A-Za-z0-9.-]+\.skill)\.request\/([0-9]+\.[0-9]+)$/
+const TRANSPORT_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,63}$/
 
 function asObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -222,6 +223,20 @@ function invocationRequest(context, operation, input) {
   }
 }
 
+export function transportFailureCode(error) {
+  const inspected = new Set()
+  let candidate = error
+  while (candidate && typeof candidate === 'object' && !inspected.has(candidate)) {
+    inspected.add(candidate)
+    const code = typeof candidate.code === 'string' ? candidate.code.trim() : ''
+    if (TRANSPORT_ERROR_CODE_PATTERN.test(code)) return code
+    const name = typeof candidate.name === 'string' ? candidate.name.trim() : ''
+    if (name === 'AbortError' || name === 'TimeoutError') return name
+    candidate = candidate.cause
+  }
+  return 'UNKNOWN_TRANSPORT_ERROR'
+}
+
 export async function invokeOfficialSkill(context, operation, input, dependencies) {
   const environment = asObject(dependencies.environment, 'broker environment')
   if (typeof dependencies.request !== 'function') {
@@ -237,8 +252,10 @@ export async function invokeOfficialSkill(context, operation, input, dependencie
       body: JSON.stringify({ input: requestEnvelope }),
       signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     })
-  } catch {
-    throw new Error(`${context.displayName} ${operation} invocation failed`)
+  } catch (error) {
+    throw new Error(
+      `${context.displayName} ${operation} invocation failed: network transport ${transportFailureCode(error)}`,
+    )
   }
   const payload = await responsePayload(response, `${context.displayName} ${operation} response`)
   if (!response.ok || payload.ok !== true) {
