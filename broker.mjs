@@ -25,6 +25,19 @@ const EVALUATION_SCHEMA = 'skill-automatic-evaluation/1.0'
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const REQUEST_SCHEMA_PATTERN = /^([A-Za-z0-9.-]+\.skill)\.request\/([0-9]+\.[0-9]+)$/
 const TRANSPORT_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,63}$/
+const NETWORK_TRANSPORT_ERROR = 'NETWORK_TRANSPORT'
+const SKILL_INVOCATION_ERROR = 'SKILL_INVOCATION_FAILED'
+
+class OfficialSkillInvocationError extends Error {
+  constructor(context, operation, transportCode) {
+    super(`${context.displayName} ${operation} invocation failed: network transport ${transportCode}`)
+    this.name = 'OfficialSkillInvocationError'
+    this.code = NETWORK_TRANSPORT_ERROR
+    this.operation = operation
+    this.retryable = false
+    this.transportCode = transportCode
+  }
+}
 
 function asObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -237,6 +250,29 @@ export function transportFailureCode(error) {
   return 'UNKNOWN_TRANSPORT_ERROR'
 }
 
+export function officialSkillFailureResponse(error) {
+  if (error instanceof OfficialSkillInvocationError) {
+    return {
+      ok: false,
+      error: {
+        code: error.code,
+        message: error.message,
+        operation: error.operation,
+        retryable: error.retryable,
+        transportCode: error.transportCode,
+      },
+    }
+  }
+  return {
+    ok: false,
+    error: {
+      code: SKILL_INVOCATION_ERROR,
+      message: error instanceof Error ? error.message : 'Skill invocation failed',
+      retryable: false,
+    },
+  }
+}
+
 export async function invokeOfficialSkill(context, operation, input, dependencies) {
   const environment = asObject(dependencies.environment, 'broker environment')
   if (typeof dependencies.request !== 'function') {
@@ -253,9 +289,7 @@ export async function invokeOfficialSkill(context, operation, input, dependencie
       signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     })
   } catch (error) {
-    throw new Error(
-      `${context.displayName} ${operation} invocation failed: network transport ${transportFailureCode(error)}`,
-    )
+    throw new OfficialSkillInvocationError(context, operation, transportFailureCode(error))
   }
   const payload = await responsePayload(response, `${context.displayName} ${operation} response`)
   if (!response.ok || payload.ok !== true) {

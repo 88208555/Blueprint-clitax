@@ -13,6 +13,7 @@ import {
   brokerCommandInput,
   invokeCommandInput,
   invokeOfficialSkill,
+  officialSkillFailureResponse,
 } from './broker.mjs'
 
 export {
@@ -25,6 +26,7 @@ export {
   callOfficialSkill,
   invokeCommandInput,
   invokeOfficialSkill,
+  officialSkillFailureResponse,
 } from './broker.mjs'
 
 const INSTALL_META = 'install-meta.json'
@@ -184,11 +186,19 @@ async function readBrokerSource(input) {
 }
 
 async function runBrokerInvocation(context, commandInput) {
-  const invocation = await invokeOfficialSkill(
-    context, commandInput.operation, commandInput.input, brokerDependencies(),
-  )
-  console.log(JSON.stringify(invocation))
-  return invocation
+  try {
+    const invocation = await invokeOfficialSkill(
+      context, commandInput.operation, commandInput.input, brokerDependencies(),
+    )
+    console.log(JSON.stringify(invocation))
+    return invocation
+  } catch (error) {
+    const response = officialSkillFailureResponse(error)
+    console.log(JSON.stringify({ response }))
+    console.error(response.error.message)
+    process.exitCode = 1
+    return null
+  }
 }
 
 export async function runIntakeHandshake(context, spec) {
