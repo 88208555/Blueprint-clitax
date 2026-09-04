@@ -9,7 +9,10 @@
     "broker.mjs",
     "README.md",
     "skill/SKILL.md",
-    "skill/skill.json"
+    "skill/skill.json",
+    "blueprint-schema.mjs",
+    "blueprint-task-graph.mjs",
+    "blueprint-bridge.mjs"
   ],
   "license": "UNLICENSED",
   "name": "cli-blueprint",
@@ -18,5 +21,5 @@
     "url": "https://github.com/88208555/blueprint-clitax.git"
   },
   "type": "module",
-  "version": "7.0.33"
+  "version": "7.0.34"
 }

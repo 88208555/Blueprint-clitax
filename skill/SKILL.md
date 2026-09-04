@@ -5,7 +5,7 @@ description: '把一个目标编译为可执行、可验证、可追溯的工程
 
 # Blueprint Skill
 
-Package version: v7.0.33
+Package version: v7.0.34
 
 远端 Hermes 编译器版本：0.4.0（独立于 npm 包版本）
 
@@ -34,7 +34,8 @@ POST JSON to the endpoint with an `input` wrapper:
 - `help`: return the usage guide, operation catalog, and request examples.
 - `intake`: return the questions the IDE must ask the user before building the Blueprint.
 - `validate`: deterministically validate a Blueprint object conforming to `blueprint.ir/1.0`.
-- `compile-inline`: validate and compile a Blueprint, returning the generated artifacts inline.
+- `compile-inline`: validate and compile a Blueprint, returning artifacts and a deterministic Swarm machine task package inline.
+- `acceptance-report`: recompile the referenced Blueprint and reconcile every acceptance criterion with supplied TestEvidence.
 
 ## Required flow
 
@@ -44,6 +45,8 @@ POST JSON to the endpoint with an `input` wrapper:
 3. Do not compile a Blueprint until all required questions are answered.
 4. Build a Blueprint conforming to `blueprint.ir/1.0`, then call `validate`.
 5. Fix every validation finding until the report is green, then call `compile-inline` and save the artifacts.
+6. Bind `response.machineTasks` to Swarm `validate-json.input.project`; bind `response.machineTasks.tasks` to the first `dispatch.input.tasks`. Pass each real Swarm response's complete tasks array to the next mutation. There is no separate Swarm import operation.
+7. After actual execution, call `acceptance-report` with the same Blueprint, its original `machineTasks.blueprintSha256`, and one evidence result for every criterion. A reported pass checks structure and coverage; execution provenance remains the caller's responsibility.
 
 ## Official catalog hops
 
@@ -248,9 +251,51 @@ After `capabilities`, read `officialCatalog`. Default allowlist is official skil
 | B1 | 结构校验与可修复 Finding | 已实现 | `evidence` 与 `recommendedAction` 已由远端 Hermes 0.4.0 返回。 |
 | B2 | 增量规划/修订 | 部分实现 | IR 支持调用方维护 `revision`；服务端不保存蓝图，也没有增量更新操作。 |
 | B3 | 业务模板库与粗粒度模式 | 规划中 | 当前没有模板操作，`template` 与 `coarseMode` 均不是受支持输入。 |
-| B4 | 验收回传、开放问题闭环、Validator 桥接 | 规划中 | 当前没有 `acceptance-report`、`answer-questions` 或 Validator 桥接操作。 |
+| B4 | 验收回传、开放问题闭环、Validator 桥接 | 部分实现 | `acceptance-report` 已逐项核对共享 TestEvidence；`answer-questions` 与自动调用 Validator 仍未实现。 |
 
-只调用 `capabilities` 返回的五个操作。不要根据规划中条目构造请求，也不要把 npm 包版本 `v7.0.33` 与远端 Hermes 编译器版本 `0.4.0` 混为一谈。
+只调用 `capabilities` 返回的六个操作。不要根据规划中条目构造请求，也不要把 npm 包版本 `v7.0.34` 与远端 Hermes 编译器版本 `0.4.0` 混为一谈。
+
+
+## 机器任务与验收回传
+
+`capabilities.operationSchemas[].inputSchema` 与 `help.operationSchemas[].inputSchema` 是可执行的 JSON Schema；公开操作拒绝未知输入字段。IR 内的扩展字段交给 Hermes 的既有语义校验，结构 Schema 不替代节点、边、追溯与环规则。
+
+成功的 `compile-inline` 同时返回 `machineTasks` 和同内容的 `IMPLEMENTATION-TASKS.json`。后者也登记于 `ARTIFACT-MANIFEST.json`。机器包格式为 `swarm.project/1.0`，含 `blueprintId`、`revision`、`blueprintSha256`、`entryTaskId`、`tasks` 与 `acceptanceCriteria`。
+
+- `blueprintSha256` 是原 `PROJECT-BLUEPRINT.json` 工件的 `sha256:<64hex>`，调用方必须原样传递。
+- `tasks` 包含 `taskId/title/status/owner/dependsOn/nodeRefs/acceptanceRefs/internalEdgeRefs`；初始状态为 `backlog`，`owner` 为 `null`。
+- 任务依赖采用所有 IR 连线的保守顺序。显式有界循环的强连通节点合并为一个实现任务，组内边保存在 `internalEdgeRefs` 并可追溯原 IR；跨组边成为 `dependsOn`，不会生成 Swarm 依赖环。
+- 任务 ID 为 `bp-` 加排序后的 `nodeRefs` JSON 的 SHA-256 前 40 位，节点顺序改变不会重编号。验收项 `criterionId` 原样保留 IR 的 `acceptanceCriteria.id`；`taskRefs` 指向对应机器任务。
+- 该包表达实现计划，不证明代码已执行。具体执行步骤由调用方显式定义，不根据文案 `nextStep` 猜测执行。
+
+`acceptance-report.input`：
+
+```json
+{
+  "blueprint": "<原 blueprint.ir/1.0 对象>",
+  "blueprintSha256": "<原 PROJECT-BLUEPRINT.json 的 sha256:...>",
+  "results": [
+    {
+      "criterionId": "<原验收项 id>",
+      "evidence": [
+        {
+          "schemaVersion": "cli.tax.test-evidence/1.0",
+          "evidenceId": "<实际执行证据 id>",
+          "kind": "test",
+          "runner": "local",
+          "command": "<实际执行命令>",
+          "exitCode": 0,
+          "durationMs": 12,
+          "summary": "<实际执行摘要>",
+          "artifactSha256": "<可选，小写 64 位裸 SHA>"
+        }
+      ]
+    }
+  ]
+}
+```
+
+以上占位文字仅为字段说明，不能作为执行证据提交。每个验收项必须恰好一条结果，证据数组非空且全部退出码为 0。未知或重复验收项、缺失或重复证据、错误格式、非零退出码以及蓝图哈希不一致，均返回 `blocked`。返回 `ACCEPTANCE-REPORT.json` 与逐项 `acceptanceReport.criteria`，并明确 `verificationMode=caller-supplied-test-evidence`、`executionVerified=false`；本地 CLI、受信执行器的日志与产物才是实际执行来源。
 
 ## 受限调用与自动评价闭环
 
