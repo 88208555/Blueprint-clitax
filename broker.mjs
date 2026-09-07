@@ -2,6 +2,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, open } from 'node:fs/promises'
 import { resolve, win32 } from 'node:path'
+import { OfficialSkillInvocationError, OfficialSkillResponseError, transportFailureCode, transportDiagnostics } from './broker-failures.mjs'
+import { queryOfficialSkillReceipt, SKILL_RECEIPT_HEADER, SKILL_RECEIPT_SCHEMA } from './broker-recovery.mjs'
+export { officialSkillFailureResponse, transportFailureCode } from './broker-failures.mjs'
 
 export const LOOKUP_TIMEOUT_MS = 8000
 export const CALL_TIMEOUT_MS = 120_000
@@ -24,20 +27,6 @@ const VALIDATION_STATES = new Set(['passed', 'failed', 'incomplete'])
 const EVALUATION_SCHEMA = 'skill-automatic-evaluation/1.0'
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 const REQUEST_SCHEMA_PATTERN = /^([A-Za-z0-9.-]+\.skill)\.request\/([0-9]+\.[0-9]+)$/
-const TRANSPORT_ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{1,63}$/
-const NETWORK_TRANSPORT_ERROR = 'NETWORK_TRANSPORT'
-const SKILL_INVOCATION_ERROR = 'SKILL_INVOCATION_FAILED'
-
-class OfficialSkillInvocationError extends Error {
-  constructor(context, operation, transportCode) {
-    super(`${context.displayName} ${operation} invocation failed: network transport ${transportCode}`)
-    this.name = 'OfficialSkillInvocationError'
-    this.code = NETWORK_TRANSPORT_ERROR
-    this.operation = operation
-    this.retryable = false
-    this.transportCode = transportCode
-  }
-}
 
 function asObject(value, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -214,12 +203,21 @@ export function authoritativeEvaluation(value, expected) {
   return evaluation
 }
 
-async function responsePayload(response, label) {
+async function responsePayload(response, context, request) {
+  const label = `${context.displayName} ${request.operation} response`
+  let payload
   try {
-    return asObject(await response.json(), label)
-  } catch {
-    throw new Error(`${label} is not valid JSON (HTTP ${response.status})`)
+    payload = await response.json()
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new OfficialSkillResponseError(request, 'response-parse', `${label} is not valid JSON (HTTP ${response.status})`)
+    }
+    throw new OfficialSkillInvocationError(context, request, transportFailureCode(error), 'response-body', error?.transport)
   }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new OfficialSkillResponseError(request, 'response-validation', `${label} must be an object`)
+  }
+  return payload
 }
 
 function invocationRequest(context, operation, input) {
@@ -236,43 +234,6 @@ function invocationRequest(context, operation, input) {
   }
 }
 
-export function transportFailureCode(error) {
-  const inspected = new Set()
-  let candidate = error
-  while (candidate && typeof candidate === 'object' && !inspected.has(candidate)) {
-    inspected.add(candidate)
-    const code = typeof candidate.code === 'string' ? candidate.code.trim() : ''
-    if (TRANSPORT_ERROR_CODE_PATTERN.test(code)) return code
-    const name = typeof candidate.name === 'string' ? candidate.name.trim() : ''
-    if (name === 'AbortError' || name === 'TimeoutError') return name
-    candidate = candidate.cause
-  }
-  return 'UNKNOWN_TRANSPORT_ERROR'
-}
-
-export function officialSkillFailureResponse(error) {
-  if (error instanceof OfficialSkillInvocationError) {
-    return {
-      ok: false,
-      error: {
-        code: error.code,
-        message: error.message,
-        operation: error.operation,
-        retryable: error.retryable,
-        transportCode: error.transportCode,
-      },
-    }
-  }
-  return {
-    ok: false,
-    error: {
-      code: SKILL_INVOCATION_ERROR,
-      message: error instanceof Error ? error.message : 'Skill invocation failed',
-      retryable: false,
-    },
-  }
-}
-
 export async function invokeOfficialSkill(context, operation, input, dependencies) {
   const environment = asObject(dependencies.environment, 'broker environment')
   if (typeof dependencies.request !== 'function') {
@@ -284,17 +245,64 @@ export async function invokeOfficialSkill(context, operation, input, dependencie
   try {
     response = await dependencies.request(context.endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: authorization },
+      headers: { 'Content-Type': 'application/json', Authorization: authorization,
+        [SKILL_RECEIPT_HEADER]: SKILL_RECEIPT_SCHEMA },
       body: JSON.stringify({ input: requestEnvelope }),
       signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     })
   } catch (error) {
-    throw new OfficialSkillInvocationError(context, operation, transportFailureCode(error))
+    const failure = new OfficialSkillInvocationError(context, requestEnvelope, transportFailureCode(error), 'request', error?.transport)
+    return recoverTransportFailure(context, requestEnvelope, dependencies, authorization, failure)
   }
-  const payload = await responsePayload(response, `${context.displayName} ${operation} response`)
+  let payload
+  try {
+    payload = await responsePayload(response, context, requestEnvelope)
+  } catch (error) {
+    if (!(error instanceof OfficialSkillInvocationError)) throw error
+    return recoverTransportFailure(context, requestEnvelope, dependencies, authorization, error)
+  }
   if (!response.ok || payload.ok !== true) {
-    throw new Error(`${context.displayName} ${operation} failed: HTTP ${response.status}`)
+    throw new OfficialSkillResponseError(requestEnvelope, 'http-response', `${context.displayName} ${operation} failed: HTTP ${response.status}`)
   }
+  try {
+    const invocation = validateInvocationResponse(context, operation, payload, requestEnvelope)
+    const transport = transportDiagnostics(response.transport)
+    return transport ? { ...invocation, transport } : invocation
+  } catch (error) {
+    throw new OfficialSkillResponseError(requestEnvelope, 'response-validation',
+      error instanceof Error ? error.message : 'Skill response validation failed')
+  }
+}
+
+async function recoverTransportFailure(context, request, dependencies, authorization, failure) {
+  if (failure.transport?.submitted === false) throw failure
+  try {
+    const invocation = await queryOfficialSkillReceipt(context, request, dependencies, authorization,
+      (payload) => validateInvocationResponse(context, request.operation, payload, request))
+    return failure.transport ? { ...invocation, transport: failure.transport } : invocation
+  } catch (error) {
+    if (!(error instanceof OfficialSkillResponseError) || error.code !== 'SKILL_INVOCATION_UNCERTAIN') throw error
+    failure.recovery = { status: error.receiptStatus, message: error.message }
+    throw failure
+  }
+}
+
+export async function recoverOfficialSkill(context, operation, requestId, dependencies) {
+  const normalizedOperation = requiredString(operation, 'skill operation')
+  const normalizedRequestId = requiredString(requestId, 'skill requestId')
+  if (!IDENTIFIER_PATTERN.test(normalizedOperation) || !IDENTIFIER_PATTERN.test(normalizedRequestId)) {
+    throw new Error('skill recovery identity is invalid')
+  }
+  expectedResponseSchema(context.schemaVersion)
+  const environment = asObject(dependencies.environment, 'broker environment')
+  if (typeof dependencies.request !== 'function') throw new Error('broker request dependency is required')
+  const authorization = await brainClientAuthorization(context, environment, dependencies.credentialAccess)
+  const request = { schemaVersion: context.schemaVersion, requestId: normalizedRequestId, operation: normalizedOperation }
+  return queryOfficialSkillReceipt(context, request, dependencies, authorization,
+    (payload) => validateInvocationResponse(context, normalizedOperation, payload, request))
+}
+
+function validateInvocationResponse(context, operation, payload, requestEnvelope) {
   const invocationId = payload.feedbackInvocationId
   if (typeof invocationId !== 'string' || !INVOCATION_PATTERN.test(invocationId)) {
     throw new Error(`${context.displayName} ${operation} response is missing a valid feedbackInvocationId`)

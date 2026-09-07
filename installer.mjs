@@ -13,6 +13,7 @@ import {
   brokerCommandInput,
   invokeCommandInput,
   invokeOfficialSkill,
+  recoverOfficialSkill,
   officialSkillFailureResponse,
 } from './broker.mjs'
 
@@ -26,8 +27,11 @@ export {
   callOfficialSkill,
   invokeCommandInput,
   invokeOfficialSkill,
+  recoverOfficialSkill,
   officialSkillFailureResponse,
 } from './broker.mjs'
+
+import { createBrokerTransport } from './broker-transport.mjs'
 
 const INSTALL_META = 'install-meta.json'
 const BROKER_STDIN_MAX_BYTES = 1_048_576
@@ -91,7 +95,8 @@ export function installTarget(skillName, explicit) {
 }
 
 export async function fetchLatestVersion(context) {
-  const response = await fetch(context.latestEndpoint, { signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS) })
+  const request = createBrokerTransport({ environment: process.env })
+  const response = await request(context.latestEndpoint, { signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS) })
   if (!response.ok) throw new Error(`cli.tax skill lookup failed: HTTP ${response.status}`)
   const data = asObject(await response.json(), 'cli.tax skill lookup')
   return {
@@ -162,6 +167,8 @@ export function defaultUsage(context, extraLines) {
     '      Invoke through the restricted local broker; a valid real HTTP invocation submits one authority-bound evaluation.',
     `  npx ${context.npmName}@latest broker`,
     '      Read one {"operation":"...","input":{...}} request from JSON stdin.',
+    `  npx ${context.npmName}@latest recover <operation> <requestId>`,
+    '      Query an uncertain invocation without resending or charging again.',
     'Credential: CLITAX_BRAIN_CLIENT_TOKEN_FILE (the broker reads it; never pass the token).',
     `Endpoint: ${context.endpoint}`,
   ]
@@ -170,7 +177,7 @@ export function defaultUsage(context, extraLines) {
 }
 
 function brokerDependencies() {
-  return { environment: process.env, request: fetch }
+  return { environment: process.env, request: createBrokerTransport({ environment: process.env }) }
 }
 
 async function readBrokerSource(input) {
@@ -198,6 +205,19 @@ async function runBrokerInvocation(context, commandInput) {
     console.error(response.error.message)
     process.exitCode = 1
     return null
+  }
+}
+
+async function runBrokerRecovery(context, args) {
+  if (args.length !== 3) throw new Error('recover requires operation and original requestId')
+  try {
+    const invocation = await recoverOfficialSkill(context, args[1], args[2], brokerDependencies())
+    console.log(JSON.stringify(invocation))
+  } catch (error) {
+    const response = officialSkillFailureResponse(error)
+    console.log(JSON.stringify({ response }))
+    console.error(response.error.message)
+    process.exitCode = 1
   }
 }
 
@@ -253,6 +273,7 @@ export async function dispatchOfficialSkillCli(options) {
     if (command === 'install') await installOfficialSkill(context, argument)
     else if (command === 'check') await checkOfficialSkill(context, argument)
     else if (command === 'run') await options.runCommand(context)
+    else if (command === 'recover') await runBrokerRecovery(context, args)
     else if (command === 'invoke') await runBrokerInvocation(context, invokeCommandInput(args))
     else if (command === 'broker') {
       await runBrokerInvocation(context, brokerCommandInput(await readBrokerSource(stdin)))

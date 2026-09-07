@@ -5,7 +5,7 @@ description: '把一个目标编译为可执行、可验证、可追溯的工程
 
 # Blueprint Skill
 
-Package version: v7.0.36
+Package version: v7.0.37
 
 远端 Hermes 编译器版本：0.4.0（独立于 npm 包版本）
 
@@ -253,7 +253,7 @@ After `capabilities`, read `officialCatalog`. Default allowlist is official skil
 | B3 | 业务模板库与粗粒度模式 | 规划中 | 当前没有模板操作，`template` 与 `coarseMode` 均不是受支持输入。 |
 | B4 | 验收回传、开放问题闭环、Validator 桥接 | 部分实现 | `acceptance-report` 已逐项核对共享 TestEvidence；`answer-questions` 与自动调用 Validator 仍未实现。 |
 
-只调用 `capabilities` 返回的六个操作。不要根据规划中条目构造请求，也不要把 npm 包版本 `v7.0.36` 与远端 Hermes 编译器版本 `0.4.0` 混为一谈。
+只调用 `capabilities` 返回的六个操作。不要根据规划中条目构造请求，也不要把 npm 包版本 `v7.0.37` 与远端 Hermes 编译器版本 `0.4.0` 混为一谈。
 
 
 ## 机器任务与验收回传
@@ -309,3 +309,9 @@ After `capabilities`, read `officialCatalog`. Default allowlist is official skil
 - 本地 CLI 不提供手工评分或评语提交命令，人类不得选择技能分数或填写技能评价；日常聊天不属于评价协议。
 
 调用示例：`npx cli-blueprint@latest invoke <operation> '<JSON对象>'`。IDE 集成可向 `npx cli-blueprint@latest broker` 的 stdin 发送 `{"operation":"capabilities","input":{}}`。
+
+## 网络中断与原回执恢复
+
+仅在 TLS 握手前确定尚未发送 HTTP 请求时，broker 才允许最多 3 次连接尝试，并受总超时约束。请求发出后发生断线或响应中断，只用 GET 查询原 requestId 的服务端回执，禁止重发 POST；未取得有效回执时保留不确定状态，不得假定成功或继续依赖步骤。
+
+`npx cli-blueprint@latest recover <operation> <requestId>` 可重新查询原调用，不会重做操作或重复计费。链恢复不会跳过人工确认，也不会自动重跑结果不确定的本地命令。代理连接需 Node.js 22.21+ 或 24.5+；不支持的运行时会明确报错。

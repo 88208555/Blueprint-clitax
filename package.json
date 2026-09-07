@@ -7,6 +7,10 @@
     "cli.mjs",
     "installer.mjs",
     "broker.mjs",
+    "broker-failures.mjs",
+    "broker-recovery.mjs",
+    "broker-transport.mjs",
+    "broker-transport-attempt.mjs",
     "README.md",
     "skill/SKILL.md",
     "skill/skill.json",
@@ -21,5 +25,5 @@
     "url": "https://github.com/88208555/blueprint-clitax.git"
   },
   "type": "module",
-  "version": "7.0.36"
+  "version": "7.0.37"
 }
