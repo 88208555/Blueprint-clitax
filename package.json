@@ -6,6 +6,10 @@
   "files": [
     "cli.mjs",
     "installer.mjs",
+    "installer-storage.mjs",
+    "broker-account-storage.mjs",
+    "broker-credentials.mjs",
+    "official-skill-update.mjs",
     "broker.mjs",
     "broker-failures.mjs",
     "broker-recovery.mjs",
@@ -25,5 +29,5 @@
     "url": "https://github.com/88208555/blueprint-clitax.git"
   },
   "type": "module",
-  "version": "7.0.38"
+  "version": "7.0.39"
 }

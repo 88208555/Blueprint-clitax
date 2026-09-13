@@ -1,25 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { constants } from 'node:fs'
-import { lstat, open } from 'node:fs/promises'
-import { resolve, win32 } from 'node:path'
+import { brainClientAuthorization } from './broker-credentials.mjs'
+import { prepareOfficialSkillUse, withUpgradeMetadata } from './official-skill-update.mjs'
+export { brainClientAuthorization, brainClientTokenPath } from './broker-credentials.mjs'
+export { LOOKUP_TIMEOUT_MS } from './official-skill-update.mjs'
 import { OfficialSkillInvocationError, OfficialSkillResponseError, transportFailureCode, transportDiagnostics } from './broker-failures.mjs'
 import { queryOfficialSkillReceipt, SKILL_RECEIPT_HEADER, SKILL_RECEIPT_SCHEMA } from './broker-recovery.mjs'
 export { officialSkillFailureResponse, transportFailureCode } from './broker-failures.mjs'
 
-export const LOOKUP_TIMEOUT_MS = 8000
 export const CALL_TIMEOUT_MS = 120_000
-const FEEDBACK_API_PATH = '/api/v1/telemetry/skill-usage'
-const TOKEN_FILE_ENV = 'CLITAX_BRAIN_CLIENT_TOKEN_FILE'
-const TOKEN_FILE_VERSION = 'member-brain.client-token-file/1.0'
-const AUTH_SCHEME = 'BrainClient'
-const TOKEN_FILE_MAX_BYTES = 16_384
-const POSIX_TOKEN_FILE_MODE = 0o600
-const WINDOWS_BROKER_DIRECTORY = ['CLI.Tax', 'broker']
 const FEEDBACK_COMMENT_MAX = 500
 const EVALUATION_DURATION_MAX = 86_400_000
 const SCORE_MIN = 0
 const SCORE_MAX = 100
-const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 const INVOCATION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/
 const PROTOCOL_STATUSES = new Set(['succeeded', 'blocked', 'failed'])
@@ -46,84 +38,6 @@ function boundedInteger(value, label) {
     throw new Error(`${label} must be a non-negative safe integer`)
   }
   return value
-}
-
-function insideWindowsDirectory(candidate, directory) {
-  const relative = win32.relative(directory, candidate)
-  return relative === '' || (!relative.startsWith('..\\') && relative !== '..' && !win32.isAbsolute(relative))
-}
-
-export function brainClientTokenPath(environment, platform = process.platform) {
-  const configured = requiredString(environment[TOKEN_FILE_ENV], TOKEN_FILE_ENV)
-  if (platform !== 'win32') return resolve(configured)
-  if (!win32.isAbsolute(configured)) {
-    throw new Error('Windows Brain Client token file path must be absolute')
-  }
-  const localAppData = requiredString(environment.LOCALAPPDATA, 'LOCALAPPDATA')
-  const brokerDirectory = win32.resolve(localAppData, ...WINDOWS_BROKER_DIRECTORY)
-  const candidate = win32.resolve(configured)
-  if (!insideWindowsDirectory(candidate, brokerDirectory)) {
-    throw new Error(`Windows Brain Client token file must be inside ${brokerDirectory}`)
-  }
-  return candidate
-}
-
-function assertTokenFileStatus(status, platform, currentUserId) {
-  if (!status.isFile() || status.size < 1 || status.size > TOKEN_FILE_MAX_BYTES) {
-    throw new Error('Brain Client token file must be a non-empty restricted file')
-  }
-  if (platform === 'win32') return
-  if (!Number.isInteger(currentUserId)) {
-    throw new Error('Brain Client token file ownership cannot be verified')
-  }
-  if (status.uid !== currentUserId || (status.mode & 0o777) !== POSIX_TOKEN_FILE_MODE) {
-    throw new Error('Brain Client token file must be owned by the current user with mode 0600')
-  }
-}
-
-function parseTokenFile(source) {
-  let tokenFile
-  try {
-    tokenFile = asObject(JSON.parse(source), 'Brain Client token file')
-  } catch {
-    throw new Error('Brain Client token file must contain valid JSON')
-  }
-  const expectedKeys = ['authorizationScheme', 'endpoint', 'schemaVersion', 'token']
-  if (Object.keys(tokenFile).sort().join('\n') !== expectedKeys.join('\n')) {
-    throw new Error('Brain Client token file contains unknown or missing fields')
-  }
-  return tokenFile
-}
-
-export async function brainClientAuthorization(context, environment, dependencies = {}) {
-  const platform = dependencies.platform ?? process.platform
-  const tokenFilePath = brainClientTokenPath(environment, platform)
-  const inspectPath = dependencies.lstat ?? lstat
-  const openPath = dependencies.open ?? open
-  const currentUserId = platform === 'win32'
-    ? null
-    : (dependencies.getuid ?? process.getuid)?.()
-  const linkStatus = await inspectPath(tokenFilePath)
-  if (linkStatus.isSymbolicLink()) throw new Error('Brain Client token file cannot be a symlink')
-  const noFollow = platform === 'win32' ? 0 : (constants.O_NOFOLLOW ?? 0)
-  const handle = await openPath(tokenFilePath, constants.O_RDONLY | noFollow)
-  try {
-    const status = await handle.stat()
-    assertTokenFileStatus(status, platform, currentUserId)
-    const tokenFile = parseTokenFile(await handle.readFile('utf8'))
-    const endpoint = new URL(requiredString(tokenFile.endpoint, 'Brain Client endpoint'))
-    if (tokenFile.schemaVersion !== TOKEN_FILE_VERSION
-      || tokenFile.authorizationScheme !== AUTH_SCHEME
-      || endpoint.origin !== new URL(context.endpoint).origin
-      || endpoint.pathname !== FEEDBACK_API_PATH || endpoint.search || endpoint.hash
-      || endpoint.username || endpoint.password
-      || !TOKEN_PATTERN.test(tokenFile.token)) {
-      throw new Error('Brain Client token file authority is invalid')
-    }
-    return `${AUTH_SCHEME} ${tokenFile.token}`
-  } finally {
-    await handle.close()
-  }
 }
 
 function canonicalJson(value) {
@@ -205,6 +119,9 @@ export function authoritativeEvaluation(value, expected) {
 
 async function responsePayload(response, context, request) {
   const label = `${context.displayName} ${request.operation} response`
+  if (response.status === 401 || response.status === 403) {
+    throw new OfficialSkillResponseError(request, 'http-response', 'Brain Client authorization was rejected; copy the current authenticated setup from CLI.Tax and run configure again. Revoked credentials cannot renew themselves.')
+  }
   let payload
   try {
     payload = await response.json()
@@ -235,6 +152,9 @@ function invocationRequest(context, operation, input) {
 }
 
 export async function invokeOfficialSkill(context, operation, input, dependencies) {
+  const prepared = await prepareOfficialSkillUse(context, 'broker.mjs', dependencies)
+  if (prepared.module !== null) return withUpgradeMetadata(
+    await prepared.module.invokeOfficialSkill(prepared.context, operation, input, dependencies), prepared.upgrade)
   const environment = asObject(dependencies.environment, 'broker environment')
   if (typeof dependencies.request !== 'function') {
     throw new Error('broker request dependency is required')
@@ -252,14 +172,14 @@ export async function invokeOfficialSkill(context, operation, input, dependencie
     })
   } catch (error) {
     const failure = new OfficialSkillInvocationError(context, requestEnvelope, transportFailureCode(error), 'request', error?.transport)
-    return recoverTransportFailure(context, requestEnvelope, dependencies, authorization, failure)
+    return withUpgradeMetadata(await recoverTransportFailure(context, requestEnvelope, dependencies, authorization, failure), prepared.upgrade)
   }
   let payload
   try {
     payload = await responsePayload(response, context, requestEnvelope)
   } catch (error) {
     if (!(error instanceof OfficialSkillInvocationError)) throw error
-    return recoverTransportFailure(context, requestEnvelope, dependencies, authorization, error)
+    return withUpgradeMetadata(await recoverTransportFailure(context, requestEnvelope, dependencies, authorization, error), prepared.upgrade)
   }
   if (!response.ok || payload.ok !== true) {
     throw new OfficialSkillResponseError(requestEnvelope, 'http-response', `${context.displayName} ${operation} failed: HTTP ${response.status}`)
@@ -267,7 +187,7 @@ export async function invokeOfficialSkill(context, operation, input, dependencie
   try {
     const invocation = validateInvocationResponse(context, operation, payload, requestEnvelope)
     const transport = transportDiagnostics(response.transport)
-    return transport ? { ...invocation, transport } : invocation
+    return withUpgradeMetadata(transport ? { ...invocation, transport } : invocation, prepared.upgrade)
   } catch (error) {
     throw new OfficialSkillResponseError(requestEnvelope, 'response-validation',
       error instanceof Error ? error.message : 'Skill response validation failed')

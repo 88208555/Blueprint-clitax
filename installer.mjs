@@ -1,10 +1,14 @@
+import { latestOfficialSkillContext } from './official-skill-update.mjs'
+import { installTarget, writeManagedSkill } from './installer-storage.mjs'
+export { installTarget, readInstallMeta } from './installer-storage.mjs'
+import { configureBrainClientCredential } from './broker-credentials.mjs'
 /**
  * 八个官方技能共用这一份安装器。packages/*-cli/installer.mjs 必须与本文件字节一致。
  * 禁止第二套超时、第二套版本来源、第二套 bin 名。
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { cp, mkdir, rm, writeFile } from 'node:fs/promises'
-import { dirname, join, resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import { stdin, stdout } from 'node:process'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
@@ -33,7 +37,6 @@ export {
 
 import { createBrokerTransport } from './broker-transport.mjs'
 
-const INSTALL_META = 'install-meta.json'
 const BROKER_STDIN_MAX_BYTES = 1_048_576
 
 function asObject(value, label) {
@@ -81,19 +84,6 @@ export function loadOfficialSkillContext(packageRoot) {
   }
 }
 
-export function readInstallMeta(target) {
-  const path = join(target, INSTALL_META)
-  if (!existsSync(path)) return null
-  return asObject(JSON.parse(readFileSync(path, 'utf8')), INSTALL_META)
-}
-
-export function installTarget(skillName, explicit) {
-  if (explicit) return resolve(explicit)
-  const codexHome = process.env.CODEX_HOME?.trim()
-  if (codexHome) return join(codexHome, 'skills', skillName)
-  return join(process.cwd(), '.codex', 'skills', skillName)
-}
-
 export async function fetchLatestVersion(context) {
   const request = createBrokerTransport({ environment: process.env })
   const response = await request(context.latestEndpoint, { signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS) })
@@ -105,51 +95,38 @@ export async function fetchLatestVersion(context) {
   }
 }
 
-export async function installOfficialSkill(context, explicit) {
-  const target = installTarget(context.skillName, explicit)
-  await mkdir(target, { recursive: true })
-  const previous = readInstallMeta(target)
-  await rm(join(target, 'references'), { recursive: true, force: true })
-  await cp(context.skillDir, target, { recursive: true, force: true })
-  const installed = asObject(JSON.parse(readFileSync(join(target, 'skill.json'), 'utf8')), 'installed skill.json')
-  const installedVersion = requiredString(installed.version, 'installed skill.json version')
-  await writeFile(join(target, INSTALL_META), `${JSON.stringify({
-    source: context.runtimeCode,
-    slug: context.skillName,
-    version: installedVersion,
-    packageVersion: context.packageVersion,
-    endpoint: context.endpoint,
-    installedAt: new Date().toISOString(),
-  }, null, 2)}\n`)
-  if (previous?.version && previous.version !== installedVersion) {
-    console.log(`${context.displayName} skill updated: ${target}`)
-    console.log(`  ${previous.version} → ${installedVersion}`)
-  } else {
-    console.log(`${context.displayName} skill installed: ${target} (${installedVersion})`)
-  }
-  console.log('Next: return to your IDE and state the goal. The agent reads the installed SKILL.md.')
+function writeInstallationResult(runtime, value) {
+  const line = JSON.stringify(value) + '\n'
+  if (runtime.writeOutput === undefined) process.stdout.write(line)
+  else runtime.writeOutput(line)
 }
 
-export async function checkOfficialSkill(context, explicit) {
-  const target = installTarget(context.skillName, explicit)
-  const current = readInstallMeta(target)
-  if (!current) {
-    console.log(`${context.displayName} skill is not installed. Run: npx ${context.npmName}@latest install`)
-    process.exitCode = 1
-    return
-  }
-  const installedVersion = requiredString(current.version, 'install-meta.json version')
-  const packageVersion = requiredString(current.packageVersion, 'install-meta.json packageVersion')
-  console.log(`Installed: ${installedVersion} (package ${packageVersion})`)
-  const latest = await fetchLatestVersion(context)
-  console.log(`Latest on cli.tax: ${latest.version}`)
-  if (installedVersion === latest.version) {
-    console.log('Up to date.')
-    return
-  }
-  console.log(`Update available: ${installedVersion} → ${latest.version}`)
-  console.log(`Run: npx ${context.npmName}@latest install`)
-  process.exitCode = 1
+function installationDependencies(dependencies) {
+  return dependencies === undefined ? brokerDependencies() : dependencies
+}
+
+export async function installOfficialSkill(context, explicit, dependencies) {
+  const runtime = installationDependencies(dependencies)
+  const selected = await latestOfficialSkillContext(context, runtime)
+  const environment = runtime.environment === undefined ? process.env : runtime.environment
+  const workingDirectory = runtime.workingDirectory === undefined ? process.cwd() : runtime.workingDirectory
+  const target = installTarget(selected.skillName, explicit, environment, workingDirectory)
+  const installed = await writeManagedSkill(selected, target, { ...runtime, allowCreate: true })
+  if (installed.status === 'skipped') throw new Error('Skill install refused: ' + installed.reason)
+  writeInstallationResult(runtime, { installed, reloadRequired: installed.status !== 'current' })
+  return installed
+}
+
+export async function checkOfficialSkill(context, explicit, dependencies) {
+  const runtime = installationDependencies(dependencies)
+  const selected = await latestOfficialSkillContext(context, runtime)
+  const environment = runtime.environment === undefined ? process.env : runtime.environment
+  const workingDirectory = runtime.workingDirectory === undefined ? process.cwd() : runtime.workingDirectory
+  const target = installTarget(selected.skillName, explicit, environment, workingDirectory)
+  const installed = await writeManagedSkill(selected, target, runtime)
+  if (installed.status === 'skipped') throw new Error('Skill check could not update its managed target: ' + installed.reason)
+  writeInstallationResult(runtime, { installed, reloadRequired: installed.status === 'updated' })
+  return installed
 }
 
 export function defaultUsage(context, extraLines) {
@@ -157,10 +134,12 @@ export function defaultUsage(context, extraLines) {
     `${context.npmName} — install and run the ${context.displayName} skill from CLI.Tax`,
     '',
     'Usage:',
+    '  configure < credential.json',
+    '      Store the Brain Client credential for this account; never put tokens in command arguments.',
     `  npx ${context.npmName}@latest install [directory]`,
     `      Install the ${context.displayName} skill for the current IDE.`,
     `  npx ${context.npmName}@latest check [directory]`,
-    '      Check whether the installed skill has a newer version.',
+    '      Check and atomically update an already managed skill to the current official release.',
     `  npx ${context.npmName}@latest run`,
     "      Run this skill's applicability or onboarding flow; only a real HTTP invocation can trigger automatic evaluation.",
     `  npx ${context.npmName}@latest invoke <operation> <JSON-object>`,
@@ -169,7 +148,8 @@ export function defaultUsage(context, extraLines) {
     '      Read one {"operation":"...","input":{...}} request from JSON stdin.',
     `  npx ${context.npmName}@latest recover <operation> <requestId>`,
     '      Query an uncertain invocation without resending or charging again.',
-    'Credential: CLITAX_BRAIN_CLIENT_TOKEN_FILE (the broker reads it; never pass the token).',
+    'Credential: configure reads a token-file JSON document from stdin and stores it once for the current account.',
+    'An explicit CLITAX_BRAIN_CLIENT_TOKEN_FILE must be absolute. Revoked keys require a fresh authenticated copy from CLI.Tax.',
     `Endpoint: ${context.endpoint}`,
   ]
   if (extraLines?.length) lines.push('', ...extraLines)
@@ -270,7 +250,12 @@ export async function dispatchOfficialSkillCli(options) {
   const command = args[0] ?? 'help'
   const argument = args[1]
   try {
-    if (command === 'install') await installOfficialSkill(context, argument)
+    if (command === 'configure') {
+      if (args.length !== 1) throw new Error('configure accepts credentials only through JSON stdin')
+      const configured = await configureBrainClientCredential(await readBrokerSource(stdin))
+      process.stdout.write(JSON.stringify(configured) + '\n')
+    }
+    else if (command === 'install') await installOfficialSkill(context, argument)
     else if (command === 'check') await checkOfficialSkill(context, argument)
     else if (command === 'run') await options.runCommand(context)
     else if (command === 'recover') await runBrokerRecovery(context, args)
