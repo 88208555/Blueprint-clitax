@@ -3,7 +3,7 @@ import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { lstat, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
 import { join, win32 } from 'node:path'
-import { assertAccountAncestors, currentAccountHome, ensureAccountDirectory } from './broker-account-storage.mjs'
+import { assertAccountAncestors, currentAccountHome, ensureAccountDirectory, windowsSystemExecutable } from './broker-account-storage.mjs'
 import { pathToFileURL } from 'node:url'
 import { accountBrokerDirectory } from './broker-credentials.mjs'
 import { createBrokerTransport } from './broker-transport.mjs'
@@ -70,7 +70,8 @@ export function windowsNpmEntry(output) {
 
 async function npmInvocation(environment) {
   if (process.platform !== 'win32') return { executable: 'npm', args: [] }
-  const found = await runFile('where.exe', ['npm'], { env: environment, windowsHide: true, timeout: LOOKUP_TIMEOUT_MS })
+  const found = await runFile(windowsSystemExecutable('where.exe', environment), ['npm'],
+    { env: environment, shell: false, windowsHide: true, timeout: LOOKUP_TIMEOUT_MS })
   const entry = windowsNpmEntry(found.stdout)
   for (const path of [entry.command, entry.script]) {
     await assertAccountAncestors(win32.dirname(path), 'win32')

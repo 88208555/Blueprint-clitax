@@ -13,6 +13,18 @@ const ACL_SID_ALIASES = Object.freeze({ SY: SYSTEM_SID, WD: 'S-1-1-0', BA: 'S-1-
   BU: 'S-1-5-32-545', AU: 'S-1-5-11', CO: 'S-1-3-0', CG: 'S-1-3-1', AN: 'S-1-5-7' })
 const SID_PATTERN = /^S-1-(?:[0-9]+-)*[0-9]+$/
 const ACL_TIMEOUT_MS = 15_000
+const WINDOWS_SYSTEM_EXECUTABLES = new Set(['whoami.exe', 'icacls.exe', 'where.exe'])
+
+export function windowsSystemExecutable(name, environment = process.env) {
+  if (!WINDOWS_SYSTEM_EXECUTABLES.has(name)) throw new Error('Unsupported Windows system executable')
+  const root = environment.SystemRoot
+  if (typeof root !== 'string' || !/^[A-Za-z]:[\\/]/.test(root)
+    || /[\u0000-\u001f"<>|?*]/.test(root) || root.slice(2).includes(':')
+    || root.split(/[\\/]/).includes('..')) {
+    throw new Error('SystemRoot must identify an absolute Windows installation directory')
+  }
+  return win32.join(root, 'System32', name)
+}
 
 export function currentAccountHome() {
   const home = userInfo().homedir
@@ -69,17 +81,19 @@ export function assertRestrictedWindowsAcl(text, ownerSid) {
   if (expected.size) throw new Error('Windows account ACL is missing the user or SYSTEM')
 }
 
-async function windowsOwnerSid(run) {
-  const result = await run('whoami.exe', ['/user', '/fo', 'csv', '/nh'], { windowsHide: true, timeout: ACL_TIMEOUT_MS })
+async function windowsOwnerSid(run, environment) {
+  const result = await run(windowsSystemExecutable('whoami.exe', environment), ['/user', '/fo', 'csv', '/nh'],
+    { shell: false, windowsHide: true, timeout: ACL_TIMEOUT_MS })
   const candidates = result.stdout.match(/S-1-(?:[0-9]+-)*[0-9]+/g)
   if (candidates === null || candidates.length !== 1 || !SID_PATTERN.test(candidates[0])) throw new Error('Current Windows account SID could not be verified')
   return candidates[0]
 }
 
-async function readWindowsAcl(path, run) {
+async function readWindowsAcl(path, run, environment) {
   const temporary = join(dirname(path), '.acl-' + randomUUID() + '.txt')
   try {
-    await run('icacls.exe', [path, '/save', temporary, '/q'], { windowsHide: true, timeout: ACL_TIMEOUT_MS })
+    await run(windowsSystemExecutable('icacls.exe', environment), [path, '/save', temporary, '/q'],
+      { shell: false, windowsHide: true, timeout: ACL_TIMEOUT_MS })
     return aclText(await readFile(temporary))
   } finally {
     try { await rm(temporary) } catch (error) { if (error.code !== 'ENOENT') throw error }
@@ -88,19 +102,21 @@ async function readWindowsAcl(path, run) {
 
 async function protectWindowsPath(path, directory, dependencies) {
   const run = dependencies.execFile === undefined ? runFile : dependencies.execFile
-  const owner = await windowsOwnerSid(run)
+  const environment = dependencies.environment === undefined ? process.env : dependencies.environment
+  const owner = await windowsOwnerSid(run, environment)
   const flags = directory ? '(OI)(CI)F' : 'F'
-  await run('icacls.exe', [path, '/inheritance:r', '/grant:r', '*' + owner + ':' + flags,
-    '*' + SYSTEM_SID + ':' + flags], { windowsHide: true, timeout: ACL_TIMEOUT_MS })
-  const { entries } = windowsAclEntries(await readWindowsAcl(path, run))
+  const icacls = windowsSystemExecutable('icacls.exe', environment)
+  await run(icacls, [path, '/inheritance:r', '/grant:r', '*' + owner + ':' + flags,
+    '*' + SYSTEM_SID + ':' + flags], { shell: false, windowsHide: true, timeout: ACL_TIMEOUT_MS })
+  const { entries } = windowsAclEntries(await readWindowsAcl(path, run, environment))
   for (const entry of entries) {
     const sid = Object.hasOwn(ACL_SID_ALIASES, entry.sid) ? ACL_SID_ALIASES[entry.sid] : entry.sid
     if (entry.type === 'A' && [owner, SYSTEM_SID].includes(sid)) continue
     if (!SID_PATTERN.test(sid)) throw new Error('Unexpected Windows ACL trustee')
-    await run('icacls.exe', [path, entry.type === 'D' ? '/remove:d' : '/remove:g', '*' + sid],
-      { windowsHide: true, timeout: ACL_TIMEOUT_MS })
+    await run(icacls, [path, entry.type === 'D' ? '/remove:d' : '/remove:g', '*' + sid],
+      { shell: false, windowsHide: true, timeout: ACL_TIMEOUT_MS })
   }
-  assertRestrictedWindowsAcl(await readWindowsAcl(path, run), owner)
+  assertRestrictedWindowsAcl(await readWindowsAcl(path, run, environment), owner)
 }
 
 export async function protectAccountPath(path, directory, dependencies = {}) {
@@ -130,6 +146,7 @@ export async function verifyAccountPath(path, dependencies = {}) {
     return
   }
   const run = dependencies.execFile === undefined ? runFile : dependencies.execFile
-  const owner = await windowsOwnerSid(run)
-  assertRestrictedWindowsAcl(await readWindowsAcl(path, run), owner)
+  const environment = dependencies.environment === undefined ? process.env : dependencies.environment
+  const owner = await windowsOwnerSid(run, environment)
+  assertRestrictedWindowsAcl(await readWindowsAcl(path, run, environment), owner)
 }
