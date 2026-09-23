@@ -1,15 +1,18 @@
 import { refreshManagedSkillCopies } from './installer-storage.mjs'
 import { execFile, spawn } from 'node:child_process'
+import { setTimeout as delay } from 'node:timers/promises'
 import { promisify } from 'node:util'
 import { lstat, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
 import { join, win32 } from 'node:path'
 import { assertAccountAncestors, currentAccountHome, ensureAccountDirectory, windowsSystemExecutable } from './broker-account-storage.mjs'
 import { pathToFileURL } from 'node:url'
 import { accountBrokerDirectory } from './broker-credentials.mjs'
-import { createBrokerTransport } from './broker-transport.mjs'
+import { BrokerTransportError, createBrokerTransport } from './broker-transport.mjs'
 
 const runFile = promisify(execFile)
-export const LOOKUP_TIMEOUT_MS = 8000
+export const LOOKUP_TIMEOUT_MS = 20_000
+const LOOKUP_ATTEMPTS = 2
+const LOOKUP_RETRY_DELAY_MS = 250
 const INSTALL_TIMEOUT_MS = 120_000
 const RELEASE_PATTERN = /^(?:v)?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/
 const OFFICIAL_IDENTITIES = Object.freeze({
@@ -23,6 +26,16 @@ function releaseVersion(value) {
   return value.replace(/^v/, '')
 }
 
+async function readOfficialRelease(request, endpoint) {
+  for (let attempt = 1; attempt <= LOOKUP_ATTEMPTS; attempt += 1) {
+    try { return await request(endpoint, { redirect: 'error', signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS) }) }
+    catch (error) {
+      if (!(error instanceof BrokerTransportError) || attempt === LOOKUP_ATTEMPTS) throw error
+      await delay(LOOKUP_RETRY_DELAY_MS)
+    }
+  }
+}
+
 export async function inspectOfficialRelease(context, dependencies = {}) {
   if (OFFICIAL_IDENTITIES[context.npmName] !== context.runtimeCode || typeof context.packageRoot !== 'string'
     || context.endpoint !== 'https://cli.tax/' + context.runtimeCode) {
@@ -32,7 +45,7 @@ export async function inspectOfficialRelease(context, dependencies = {}) {
   const request = dependencies.request === undefined ? createBrokerTransport({ environment }) : dependencies.request
   const endpoint = 'https://cli.tax/api/public/skills/' + context.runtimeCode
   if (!/^[A-Za-z0-9]{10}$/.test(context.runtimeCode)) throw new Error('Official runtime code is invalid')
-  const response = await request(endpoint, { redirect: 'error', signal: AbortSignal.timeout(LOOKUP_TIMEOUT_MS) })
+  const response = await readOfficialRelease(request, endpoint)
   if (!response.ok) throw new Error('Official release lookup failed: HTTP ' + response.status)
   const payload = await response.json()
   const version = releaseVersion(payload.version)
